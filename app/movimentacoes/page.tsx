@@ -14,13 +14,18 @@ export default function Mov(){
  const [filter,setFilter]=useState("all");
  const [selectedMonth,setSelectedMonth]=useState(monthKey());
  const [settling,setSettling]=useState<Transaction|null>(null);
- const items=useMemo(()=>transactions.filter(t=>t.dueDate?.startsWith(selectedMonth)&&(filter==="all"||t.type===filter)).sort((a,b)=>a.dueDate.localeCompare(b.dueDate)),[transactions,filter,selectedMonth]);
- const monthItems=useMemo(()=>transactions.filter(t=>t.dueDate?.startsWith(selectedMonth)),[transactions,selectedMonth]);
+ const items=useMemo(()=>transactions.filter(t=>{
+   if(!t.dueDate?.startsWith(selectedMonth) || t.type==="card") return false;
+   if(filter==="all") return true;
+   if(filter==="card") return t.isCardInvoice===true;
+   return t.type===filter;
+ }).sort((a,b)=>a.dueDate.localeCompare(b.dueDate)),[transactions,filter,selectedMonth]);
+ const monthItems=useMemo(()=>transactions.filter(t=>t.dueDate?.startsWith(selectedMonth)&&t.type!=="card"),[transactions,selectedMonth]);
  const sum=summarize(monthItems);
  return <AppShell title="Movimentações" subtitle="Planejado e realizado, sem misturar as duas etapas">
   <div className="month-toolbar"><button onClick={()=>setSelectedMonth(shiftMonthKey(selectedMonth,-1))}><ArrowLeft/></button><div><span>Mês selecionado</span><strong>{monthLabelFromKey(selectedMonth)}</strong></div><button onClick={()=>setSelectedMonth(shiftMonthKey(selectedMonth,1))}><ArrowRight/></button></div>
   <div className="stats-grid movements-stats"><StatCard label="Entradas previstas" value={brl(sum.incomePlanned)} hint={`${brl(sum.incomeActual)} recebido`} /><StatCard label="Despesas previstas" value={brl(sum.expensePlanned)} hint={`${brl(sum.expenseActual)} pago`} /><StatCard label="Saldo previsto" value={brl(sum.plannedBalance)} hint={`Realizado: ${brl(sum.actualBalance)}`} /><StatCard label="Ainda a pagar" value={brl(sum.pending)} hint={`${brl(sum.incomePending)} ainda a receber`} /></div>
-  <div className="filter-tabs">{[["all","Todos"],["income","Entradas"],["expense","Despesas"],["card","Cartão"]].map(([v,l])=><button key={v} onClick={()=>setFilter(v)} className={filter===v?"active":""}>{l}</button>)}</div>
+  <div className="filter-tabs">{[["all","Todos"],["income","Entradas"],["expense","Despesas"],["card","Faturas de cartão"]].map(([v,l])=><button key={v} onClick={()=>setFilter(v)} className={filter===v?"active":""}>{l}</button>)}</div>
   <section className="panel table-panel">{items.length?<div className="data-table"><div className="table-head"><span>Descrição</span><span>Vencimento</span><span>Status</span><span>Previsto</span><span>Realizado</span><span>Ações</span></div>{items.map(t=><div className="table-row" key={t.id}><div><strong>{t.description}</strong><small>{t.category}{t.installmentTotal?` · ${t.installmentNumber}/${t.installmentTotal}`:""}</small></div><span>{new Date(t.dueDate+"T12:00").toLocaleDateString("pt-BR")}</span><span className={`status ${t.status}`}>{t.status==="planned"?"Previsto":t.status==="paid"?"Pago":t.status==="received"?"Recebido":t.status}</span><strong>{brl(t.amountPlanned)}</strong><div className="actual-cell"><strong>{t.amountActual!=null?brl(t.amountActual):"—"}</strong>{t.paidDate&&<small>{new Date(t.paidDate+"T12:00").toLocaleDateString("pt-BR")}</small>}</div><div className="row-actions">{t.status==="planned"&&<button className="settle-action" title={t.type==="income"?"Registrar recebimento":"Registrar pagamento"} onClick={()=>setSettling(t)}><CheckCircle2/></button>}<button title="Excluir" onClick={()=>confirm("Excluir este lançamento?")&&removeFinancialTransaction(householdId,t.id)}><Trash2/></button></div></div>)}</div>:<Empty text="Nenhum lançamento neste mês."/>}</section>
   {settling&&<SettleModal tx={settling} accounts={accounts} householdId={householdId} onClose={()=>setSettling(null)}/>} 
  </AppShell>

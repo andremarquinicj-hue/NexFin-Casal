@@ -15,18 +15,28 @@ export const monthKeyToDate = (key: string) => { const [y,m] = key.split("-").ma
 export const shiftMonthKey = (key: string, months: number) => { const d = monthKeyToDate(key); d.setMonth(d.getMonth()+months); return monthKey(d); };
 export const monthLabelFromKey = (key: string) => monthLabel(monthKeyToDate(key));
 
+// Fluxo de caixa: compras individuais no cartão NÃO são despesas bancárias do mês.
+// A saída de dinheiro acontece somente quando a fatura consolidada é paga.
+export const isCashflowTransaction = (t: Transaction) => t.type !== "card";
+
+// Análise por categoria: usa compras individuais do cartão para preservar a categoria real,
+// mas exclui a fatura consolidada para não contar o mesmo gasto duas vezes.
+export const isSpendingDetail = (t: Transaction) =>
+  t.status !== "cancelled" &&
+  (t.type === "card" || (t.type === "expense" && t.isCardInvoice !== true));
+
 export function summarize(txs: Transaction[]) {
   const incomePlanned = txs.filter(t=>t.type==="income" && t.status!=="cancelled").reduce((s,t)=>s+t.amountPlanned,0);
   const incomeActual = txs.filter(t=>t.type==="income" && t.status==="received").reduce((s,t)=>s+(t.amountActual ?? t.amountPlanned),0);
-  const expensePlanned = txs.filter(t=>(t.type==="expense"||t.type==="card") && t.status!=="cancelled").reduce((s,t)=>s+t.amountPlanned,0);
-  const expenseActual = txs.filter(t=>(t.type==="expense"||t.type==="card") && t.status==="paid").reduce((s,t)=>s+(t.amountActual ?? t.amountPlanned),0);
-  const pending = txs.filter(t=>(t.type==="expense"||t.type==="card") && !["paid","cancelled"].includes(t.status)).reduce((s,t)=>s+t.amountPlanned,0);
+  const expensePlanned = txs.filter(t=>t.type==="expense" && t.status!=="cancelled").reduce((s,t)=>s+t.amountPlanned,0);
+  const expenseActual = txs.filter(t=>t.type==="expense" && t.status==="paid").reduce((s,t)=>s+(t.amountActual ?? t.amountPlanned),0);
+  const pending = txs.filter(t=>t.type==="expense" && !["paid","cancelled"].includes(t.status)).reduce((s,t)=>s+t.amountPlanned,0);
   const incomePending = txs.filter(t=>t.type==="income" && !["received","cancelled"].includes(t.status)).reduce((s,t)=>s+t.amountPlanned,0);
   return { incomePlanned, incomeActual, expensePlanned, expenseActual, pending, incomePending, plannedBalance: incomePlanned-expensePlanned, actualBalance: incomeActual-expenseActual };
 }
 
 export function savingsInsights(txs: Transaction[], monthlyIncome: number) {
-  const expenses = txs.filter(t=>t.type==="expense"||t.type==="card");
+  const expenses = txs.filter(isSpendingDetail);
   const grouped = expenses.reduce<Record<string,number>>((acc,t)=>{ acc[t.category]=(acc[t.category]||0)+(t.amountActual ?? t.amountPlanned); return acc; },{});
   const playbook: Record<string,{rate:number;tip:string}> = {
     "Lazer": { rate:.15, tip:"Defina um teto mensal para lazer e acompanhe o quanto ainda resta antes de novas compras." },
