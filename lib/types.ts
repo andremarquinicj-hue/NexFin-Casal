@@ -1,0 +1,28 @@
+export type MoneyStatus = "planned" | "paid" | "received" | "overdue" | "cancelled";
+export type TransactionType = "income" | "expense" | "card" | "transfer";
+export type Recurrence = "none" | "monthly";
+
+export interface AppUser { uid: string; name: string; email: string; householdId: string; }
+export interface Account { id: string; name: string; bank: string; holder: string; balance: number; color?: string; }
+export interface Card { id: string; name: string; bank: string; holder: string; limit: number; closingDay: number; dueDay: number; }
+export interface Transaction {
+  id: string;
+  description: string;
+  amountPlanned: number;
+  amountActual?: number;
+  type: TransactionType;
+  status: MoneyStatus;
+  category: string;
+  dueDate: string;
+  paidDate?: string;
+  accountId?: string;
+  cardId?: string;
+  recurrence?: Recurrence;
+  installmentGroupId?: string;
+  installmentNumber?: number;
+  installmentTotal?: number;
+  notes?: string;
+  createdBy: string;
+  createdAt?: unknown;
+}
+export interface Goal { id: string; name: string; target: number; current: number; targetDate?: string; icon?: string; }
