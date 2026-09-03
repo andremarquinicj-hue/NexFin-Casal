@@ -5,6 +5,15 @@ export const monthKey = (date = new Date()) => `${date.getFullYear()}-${String(d
 export const monthLabel = (date = new Date()) => date.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
 export const isoDate = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 export const addMonths = (dateString: string, months: number) => { const [y,m,d] = dateString.split("-").map(Number); const dt = new Date(y, m-1+months, Math.min(d,28)); return isoDate(dt); };
+export const parseMoney = (value: string | number) => {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const normalized = value.trim().replace(/\s/g, "").replace(/R\$/gi, "").replace(/\./g, "").replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+export const monthKeyToDate = (key: string) => { const [y,m] = key.split("-").map(Number); return new Date(y, m-1, 1); };
+export const shiftMonthKey = (key: string, months: number) => { const d = monthKeyToDate(key); d.setMonth(d.getMonth()+months); return monthKey(d); };
+export const monthLabelFromKey = (key: string) => monthLabel(monthKeyToDate(key));
 
 export function summarize(txs: Transaction[]) {
   const incomePlanned = txs.filter(t=>t.type==="income" && t.status!=="cancelled").reduce((s,t)=>s+t.amountPlanned,0);
@@ -12,7 +21,8 @@ export function summarize(txs: Transaction[]) {
   const expensePlanned = txs.filter(t=>(t.type==="expense"||t.type==="card") && t.status!=="cancelled").reduce((s,t)=>s+t.amountPlanned,0);
   const expenseActual = txs.filter(t=>(t.type==="expense"||t.type==="card") && t.status==="paid").reduce((s,t)=>s+(t.amountActual ?? t.amountPlanned),0);
   const pending = txs.filter(t=>(t.type==="expense"||t.type==="card") && !["paid","cancelled"].includes(t.status)).reduce((s,t)=>s+t.amountPlanned,0);
-  return { incomePlanned, incomeActual, expensePlanned, expenseActual, pending, plannedBalance: incomePlanned-expensePlanned, actualBalance: incomeActual-expenseActual };
+  const incomePending = txs.filter(t=>t.type==="income" && !["received","cancelled"].includes(t.status)).reduce((s,t)=>s+t.amountPlanned,0);
+  return { incomePlanned, incomeActual, expensePlanned, expenseActual, pending, incomePending, plannedBalance: incomePlanned-expensePlanned, actualBalance: incomeActual-expenseActual };
 }
 
 export function savingsInsights(txs: Transaction[], monthlyIncome: number) {

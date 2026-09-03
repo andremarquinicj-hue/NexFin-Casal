@@ -1,11 +1,10 @@
-# NexFin Casal
+# NexFin Casal — v1.2
 
 Aplicativo web/PWA para controle financeiro compartilhado de um casal, construído com Next.js + Firebase.
 
 ## O que já vem nesta versão
 
 - Login/cadastro com Firebase Authentication
-- Família financeira compartilhada e isolamento de dados por regras do Firestore
 - Dashboard mensal com previsto x realizado
 - Entradas, despesas e compras no cartão
 - Parcelamentos automáticos
@@ -17,17 +16,31 @@ Aplicativo web/PWA para controle financeiro compartilhado de um casal, construí
 - Dicas de economia por categoria
 - Simulador de poupança para 6 meses, 1, 2 e 5 anos
 - Interface responsiva para celular e computador
+- **Nova identidade visual NexFin integrada ao sistema**
+- **Ícone próprio para iPhone/Android ao adicionar o NexFin à tela inicial**
+- Favicon e metadados PWA configurados
 
-## 1. Criar o Firebase
+## Identidade visual
 
-No Firebase Console:
+Os arquivos principais estão em:
 
-1. Crie um projeto.
-2. Ative Authentication > Sign-in method > Email/Password.
-3. Crie o Cloud Firestore.
-4. Em Project Settings > Your apps, adicione um app Web.
-5. Copie as variáveis para `.env.local`, usando `.env.example` como modelo.
-6. Instale o Firebase CLI e publique as regras:
+- `public/brand/nexfin-logo.png` — logo completa
+- `public/brand/nexfin-symbol.png` — símbolo usado dentro do sistema
+- `public/icons/` — ícones do navegador e da tela inicial do celular
+- `app/icon.png` e `app/apple-icon.png` — ícones reconhecidos pelo Next.js/iOS
+
+## Firebase
+
+Esta cópia já está configurada em `lib/firebase.ts` com o projeto Firebase usado no NexFin atual. Portanto, para o deploy atual, **não é necessário configurar as variáveis `NEXT_PUBLIC_FIREBASE_*` na Vercel**.
+
+Ainda é necessário manter no Firebase:
+
+1. **Authentication > Sign-in method > E-mail/senha** ativado.
+2. **Cloud Firestore** criado.
+3. As regras de `firestore.rules` publicadas.
+4. O domínio da Vercel autorizado em **Authentication > Settings > Authorized domains**, se necessário.
+
+Para publicar as regras via Firebase CLI:
 
 ```bash
 npm install -g firebase-tools
@@ -36,36 +49,40 @@ firebase use --add
 firebase deploy --only firestore:rules,firestore:indexes
 ```
 
-## 2. Rodar localmente
+## Rodar localmente
 
 ```bash
 npm install
 npm run dev
 ```
 
-Abra http://localhost:3000.
+## GitHub e Vercel
 
-## 3. Subir no GitHub
+Substitua os arquivos do repositório pela versão v1.2, faça commit e push. A Vercel conectada ao GitHub fará um novo deploy automaticamente.
 
 ```bash
-git init
 git add .
-git commit -m "Primeira versão NexFin Casal"
-git branch -M main
-git remote add origin URL_DO_SEU_REPOSITORIO
-git push -u origin main
+git commit -m "NexFin v1.2 - nova logo e icones PWA"
+git push
 ```
 
-## 4. Publicar na Vercel
+## Uso no celular
 
-1. Importe o repositório do GitHub na Vercel.
-2. Em Project Settings > Environment Variables, cadastre todas as variáveis `NEXT_PUBLIC_FIREBASE_*` do `.env.local`.
-3. Faça o Deploy.
+Depois que a nova versão estiver publicada:
+
+- **iPhone/Safari:** Compartilhar → Adicionar à Tela de Início.
+- **Android/Chrome:** menu ⋮ → Adicionar à tela inicial / Instalar app.
+
+O atalho utilizará o novo ícone NexFin e abrirá o sistema com aparência de aplicativo (`display: standalone`).
 
 ## Acesso do casal
 
-O primeiro usuário cria a família. Em **Configurações**, copie o ID da família e o código de convite. No segundo celular, o parceiro escolhe **Criar conta > Entrar com convite** e usa seu próprio e-mail e senha.
+Se vocês preferirem usar **o mesmo e-mail e a mesma senha**, basta entrar com a mesma conta nos dois celulares. Os dados serão os mesmos. O fluxo de convite continua disponível no código caso vocês queiram voltar a usar contas individuais no futuro.
 
-## Próximas evoluções recomendadas
+## Novidades da versão 1.3
 
-Fechamento formal de faturas, conciliação automática de saldo bancário, notificações de vencimento, edição em lote de recorrências e exportação de relatórios em PDF/Excel.
+- Registro de **valor realizado** com data e conta bancária no momento do pagamento/recebimento.
+- Atualização automática do **saldo da conta bancária** quando uma entrada ou despesa é realizada.
+- Lançamento rápido agora permite escolher entre **Provisionar** e **Já realizado**.
+- Movimentações com seletor mensal, resumo previsto x realizado e modal profissional de confirmação.
+- Dashboard renovado com **saldo consolidado**, **saldo livre projetado**, fluxo financeiro de 6 meses e **projeção automática do próximo mês** baseada nas recorrências, parcelas e receitas já provisionadas.

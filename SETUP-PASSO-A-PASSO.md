@@ -1,34 +1,46 @@
-# Instalação rápida — NexFin Casal
+# Atualização rápida — NexFin v1.2
 
-## Firebase
-1. Crie um projeto em console.firebase.google.com.
-2. Em **Authentication > Sign-in method**, habilite **E-mail/senha**.
-3. Em **Firestore Database**, crie o banco.
-4. Em **Configurações do projeto > Seus apps**, crie um app Web e copie a configuração.
-5. Renomeie `.env.local.example` para `.env.local` e preencha as seis variáveis.
-6. Rode `firebase deploy --only firestore:rules,firestore:indexes` para publicar as regras.
+## 1. GitHub
 
-## GitHub
-1. Crie um repositório vazio.
-2. Dentro da pasta do projeto rode:
-   `git init`
-   `git add .`
-   `git commit -m "NexFin inicial"`
-   `git branch -M main`
-   `git remote add origin URL_DO_REPOSITORIO`
-   `git push -u origin main`
+Substitua o conteúdo do repositório pela pasta desta versão e faça o commit:
 
-## Vercel
-1. Clique em **Add New > Project**.
-2. Importe o repositório do GitHub.
-3. Cadastre as mesmas seis variáveis `NEXT_PUBLIC_FIREBASE_*` em **Environment Variables**.
-4. Clique em **Deploy**.
-5. Se o Firebase solicitar, adicione o domínio principal `seu-projeto.vercel.app` em **Authentication > Settings > Authorized domains**.
+```bash
+git add .
+git commit -m "NexFin v1.2 - logo e icone do app"
+git push
+```
 
-## Primeiro uso
-1. Abra o site e clique em **Primeiro acesso? Criar conta**.
-2. Crie a família financeira.
-3. Entre em **Configurações** e copie o **ID da família** e o **código de convite**.
-4. No celular da outra pessoa, crie outra conta escolhendo **Entrar com convite**.
-5. Cadastre contas bancárias, cartões e depois os salários/contas no botão **Novo lançamento**.
-6. Para salário nos dias 5 e 20, crie dois lançamentos de entrada e escolha **Recorrente mensal**.
+Se você atualiza pelo site do GitHub, pode também enviar os arquivos mantendo exatamente as mesmas pastas.
+
+## 2. Vercel
+
+Como a Vercel já está ligada ao GitHub, o `push` deve iniciar um deploy automaticamente. Aguarde ficar **Ready**.
+
+A configuração atual do Firebase está diretamente em `lib/firebase.ts`; portanto, esta versão não depende das variáveis `NEXT_PUBLIC_FIREBASE_*` para iniciar o Firebase.
+
+## 3. Conferir a nova logo
+
+Após o deploy:
+
+1. Abra o NexFin.
+2. Faça `Ctrl + F5` no computador para limpar o cache visual.
+3. Confira o símbolo novo no login e no topo do menu lateral.
+4. Confira também o favicon da aba do navegador.
+
+## 4. Salvar no celular com a nova logo
+
+### iPhone
+Safari → Compartilhar → **Adicionar à Tela de Início** → Adicionar.
+
+### Android
+Chrome → menu ⋮ → **Adicionar à tela inicial** ou **Instalar app**.
+
+O NexFin está configurado com:
+
+- ícone 192×192
+- ícone 512×512
+- ícone maskable 512×512
+- Apple Touch Icon 180×180
+- `manifest.webmanifest` com nome NexFin e modo `standalone`
+
+> Se você já tinha um atalho antigo na tela inicial, apague o atalho antigo e adicione novamente após o deploy para forçar o celular a usar a nova logo.
