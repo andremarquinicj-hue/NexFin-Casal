@@ -2,19 +2,25 @@ import { getApps, initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
-const config = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+// Firebase Web configuration.
+// These identifiers are public by design for Firebase Web apps.
+const firebaseConfig = {
+  apiKey: "AIzaSyCBeMaPJaPl-J6wNGKIJadmUYntltpvfRI",
+  authDomain: "nexfin---casal.firebaseapp.com",
+  databaseURL: "https://nexfin---casal-default-rtdb.firebaseio.com",
+  projectId: "nexfin---casal",
+  storageBucket: "nexfin---casal.firebasestorage.app",
+  messagingSenderId: "1083047179561",
+  appId: "1:1083047179561:web:73e37e08030d6fe6a57338",
 };
 
-export const firebaseConfigured = Boolean(config.apiKey && config.authDomain && config.projectId && config.appId);
+export const firebaseConfigured = true;
 
 export function getFirebaseServices() {
-  if (!firebaseConfigured) return null;
-  const app = getApps().length ? getApps()[0] : initializeApp(config);
-  return { app, auth: getAuth(app), db: getFirestore(app) };
+  const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+  return {
+    app,
+    auth: getAuth(app),
+    db: getFirestore(app),
+  };
 }
