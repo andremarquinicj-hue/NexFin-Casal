@@ -16,6 +16,10 @@ export interface Transaction {
   dueDate: string;
   paidDate?: string;
   accountId?: string;
+  fromAccountId?: string;
+  toAccountId?: string;
+  fromAccountName?: string;
+  toAccountName?: string;
   cardId?: string;
   recurrence?: Recurrence;
   installmentGroupId?: string;
@@ -30,3 +34,23 @@ export interface Transaction {
   isCardInvoice?: boolean;
 }
 export interface Goal { id: string; name: string; target: number; current: number; targetDate?: string; icon?: string; }
+
+export interface MonthlyClosing {
+  id: string;
+  month: string;
+  incomePlanned: number;
+  incomeActual: number;
+  expensePlanned: number;
+  expenseActual: number;
+  plannedBalance: number;
+  actualBalance: number;
+  pendingExpenses: number;
+  pendingIncome: number;
+  bankBalance: number;
+  transactionCount: number;
+  pendingCount: number;
+  accountBalances: Array<{ id: string; name: string; balance: number }>;
+  closedBy: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}

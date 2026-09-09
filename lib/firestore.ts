@@ -58,6 +58,57 @@ export async function createFinancialTransaction(householdId:string, data:Record
   return txRef;
 }
 
+
+export async function createBankTransfer(
+  householdId:string,
+  payload:{fromAccountId:string;toAccountId:string;amount:number|string;date:string;description?:string;createdBy:string}
+) {
+  const s=getFirebaseServices(); if(!s) throw new Error("Firebase não configurado");
+  const amount=parseMoney(payload.amount);
+  if(amount<=0) throw new Error("Informe um valor maior que zero.");
+  if(!payload.fromAccountId || !payload.toAccountId) throw new Error("Selecione a conta de origem e a conta de destino.");
+  if(payload.fromAccountId===payload.toAccountId) throw new Error("A conta de origem e destino precisam ser diferentes.");
+
+  const fromRef=doc(s.db,"households",householdId,"accounts",payload.fromAccountId);
+  const toRef=doc(s.db,"households",householdId,"accounts",payload.toAccountId);
+  const txRef=doc(collection(s.db,"households",householdId,"transactions"));
+
+  await runTransaction(s.db, async tr=>{
+    const fromSnap=await tr.get(fromRef);
+    const toSnap=await tr.get(toRef);
+    if(!fromSnap.exists() || !toSnap.exists()) throw new Error("Uma das contas selecionadas não foi encontrada.");
+    const fromData=fromSnap.data();
+    const toData=toSnap.data();
+    const fromBalance=Number(fromData.balance||0);
+    const toBalance=Number(toData.balance||0);
+    const fromName=String(fromData.name||fromData.bank||"Conta de origem");
+    const toName=String(toData.name||toData.bank||"Conta de destino");
+
+    tr.update(fromRef,{balance:fromBalance-amount,updatedAt:serverTimestamp()});
+    tr.update(toRef,{balance:toBalance+amount,updatedAt:serverTimestamp()});
+    tr.set(txRef,{
+      description:payload.description?.trim() || `Transferência ${fromName} → ${toName}`,
+      amountPlanned:amount,
+      amountActual:amount,
+      type:"transfer",
+      status:"paid",
+      category:"Transferência",
+      dueDate:payload.date,
+      paidDate:payload.date,
+      accountId:payload.fromAccountId,
+      fromAccountId:payload.fromAccountId,
+      toAccountId:payload.toAccountId,
+      fromAccountName:fromName,
+      toAccountName:toName,
+      createdBy:payload.createdBy,
+      accountImpactApplied:true,
+      createdAt:serverTimestamp(),
+      settledAt:serverTimestamp()
+    });
+  });
+  return txRef;
+}
+
 export async function settleFinancialTransaction(householdId:string, transactionId:string, payload:{actualAmount:number; actualDate:string; accountId?:string}) {
   const s=getFirebaseServices(); if(!s) throw new Error("Firebase não configurado");
   const txRef = doc(s.db,"households",householdId,"transactions",transactionId);
@@ -115,6 +166,15 @@ export async function removeFinancialTransaction(householdId:string, transaction
         const reversal = current.type === "income" ? -amount : amount;
         tr.update(accountRef,{balance:currentBalance+reversal,updatedAt:serverTimestamp()});
       }
+    }
+    if (current.type === "transfer" && current.accountImpactApplied === true && current.fromAccountId && current.toAccountId) {
+      const fromRef=doc(s.db,"households",householdId,"accounts",current.fromAccountId);
+      const toRef=doc(s.db,"households",householdId,"accounts",current.toAccountId);
+      const fromSnap=await tr.get(fromRef);
+      const toSnap=await tr.get(toRef);
+      const amount=Number(current.amountActual ?? current.amountPlanned ?? 0);
+      if(fromSnap.exists()) tr.update(fromRef,{balance:Number(fromSnap.data().balance||0)+amount,updatedAt:serverTimestamp()});
+      if(toSnap.exists()) tr.update(toRef,{balance:Number(toSnap.data().balance||0)-amount,updatedAt:serverTimestamp()});
     }
     tr.delete(txRef);
   });
@@ -267,4 +327,21 @@ export async function syncCardInvoiceForMonth(householdId:string, cardId:string,
       updatedAt: serverTimestamp(),
     });
   }
+}
+
+export async function saveMonthlyClosing(
+  householdId:string,
+  month:string,
+  data:Record<string,unknown>
+) {
+  const s=getFirebaseServices(); if(!s) throw new Error("Firebase não configurado");
+  const ref=doc(s.db,"households",householdId,"monthlyClosings",month);
+  const snap=await getDoc(ref);
+  await setDoc(ref,{
+    ...data,
+    month,
+    createdAt:snap.exists() ? (snap.data().createdAt || serverTimestamp()) : serverTimestamp(),
+    updatedAt:serverTimestamp()
+  },{merge:true});
+  return ref;
 }

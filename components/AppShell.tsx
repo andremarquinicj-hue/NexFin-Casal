@@ -3,10 +3,10 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { LayoutDashboard, ArrowLeftRight, Landmark, CreditCard, CalendarRange, PiggyBank, Lightbulb, Settings, LogOut, Plus, Menu, X } from "lucide-react";
+import { LayoutDashboard, ArrowLeftRight, Landmark, CreditCard, CalendarRange, CalendarDays, ReceiptText, PiggyBank, Lightbulb, Settings, LogOut, Plus, Menu, X } from "lucide-react";
 import { useAuth } from "./AuthProvider";
 import QuickEntry from "./QuickEntry";
-const nav=[["/dashboard","Visão geral",LayoutDashboard],["/movimentacoes","Movimentações",ArrowLeftRight],["/contas","Contas",Landmark],["/cartoes","Cartões",CreditCard],["/planejamento","Planejamento",CalendarRange],["/metas","Caixinhas",PiggyBank],["/insights","Economizar",Lightbulb],["/configuracoes","Configurações",Settings]] as const;
+const nav=[["/dashboard","Visão geral",LayoutDashboard],["/movimentacoes","Movimentações",ArrowLeftRight],["/contas","Contas",Landmark],["/cartoes","Cartões",CreditCard],["/calendario","Calendário",CalendarDays],["/planejamento","Planejamento",CalendarRange],["/fechamento","Fechamento",ReceiptText],["/metas","Caixinhas",PiggyBank],["/insights","Economizar",Lightbulb],["/configuracoes","Configurações",Settings]] as const;
 export default function AppShell({children,title,subtitle}:{children:React.ReactNode;title:string;subtitle?:string}){
  const {user,profile,loading,signOut}=useAuth(); const router=useRouter(); const path=usePathname(); const [quick,setQuick]=useState(false); const [mobile,setMobile]=useState(false);
  useEffect(()=>{if(!loading&&!user)router.replace("/login")},[loading,user,router]);
