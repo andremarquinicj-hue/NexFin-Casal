@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, CheckCircle2, CreditCard, Plus, ShoppingBag, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarRange, CheckCircle2, CreditCard, Pencil, Plus, ShoppingBag, Trash2, X } from "lucide-react";
 import AppShell from "@/components/AppShell";
 import Empty from "@/components/Empty";
 import { useHouseholdData } from "@/components/useHouseholdData";
 import { brl, cardInvoiceSchedule, monthKey, monthLabelFromKey, parseMoney, shiftMonthKey } from "@/lib/finance";
-import { createCardPurchase, createItem, removeCardPurchaseGroup, removeItem } from "@/lib/firestore";
+import { createCardPurchase, createItem, removeCardPurchaseGroup, removeItem, updateCardSettings } from "@/lib/firestore";
 import { Card, Transaction } from "@/lib/types";
 import { useAuth } from "@/components/AuthProvider";
 
@@ -15,6 +15,8 @@ export default function Cartoes() {
   const { profile } = useAuth();
   const [openCard, setOpenCard] = useState(false);
   const [purchaseCard, setPurchaseCard] = useState<Card | null>(null);
+  const [editingCard, setEditingCard] = useState<Card | null>(null);
+  const [futureCard, setFutureCard] = useState<Card | null>(null);
   const [selectedInvoiceMonth, setSelectedInvoiceMonth] = useState(monthKey());
   const [form, setForm] = useState({ name: "", bank: "", holder: "", limit: "", closingDay: "28", dueDay: "7" });
 
@@ -98,7 +100,7 @@ export default function Cartoes() {
     e.preventDefault();
     await createItem(householdId, "cards", {
       ...form,
-      limit: Number(form.limit.replace(",", ".")),
+      limit: parseMoney(form.limit),
       closingDay: Number(form.closingDay),
       dueDay: Number(form.dueDay),
     });
@@ -172,8 +174,10 @@ export default function Cartoes() {
                 {followingValue > 0 && followingMonth !== nextOpenMonth && <span>Fatura seguinte: <b>{monthLabelFromKey(followingMonth)} · {brl(followingValue)}</b></span>}
               </div>
               <small>Fecha dia {c.closingDay} · vence dia {c.dueDay}</small>
-              <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <div className="card-actions-v18">
                 <button type="button" className="soft-btn" onClick={() => setPurchaseCard(c)}><ShoppingBag />Nova compra</button>
+                <button type="button" className="soft-btn" onClick={() => setFutureCard(c)}><CalendarRange />Próximas faturas</button>
+                <button type="button" className="soft-btn" onClick={() => setEditingCard(c)}><Pencil />Editar cartão</button>
               </div>
               <div style={{ marginTop: 12 }}>
                 <small style={{ color: "#c7d2eb", display: "block", marginBottom: 6 }}>Compras parceladas ativas</small>
@@ -275,7 +279,161 @@ export default function Cartoes() {
           onClose={() => setPurchaseCard(null)}
         />
       )}
+
+      {editingCard && (
+        <EditCardModal
+          card={editingCard}
+          householdId={householdId}
+          committedValue={committedByCard[editingCard.id] || 0}
+          onClose={() => setEditingCard(null)}
+        />
+      )}
+
+      {futureCard && (
+        <FutureInvoicesModal
+          card={futureCard}
+          purchases={allCardPurchases}
+          invoices={allInvoiceTransactions}
+          currentMonth={currentMonth}
+          onOpenMonth={(key) => { setSelectedInvoiceMonth(key); setFutureCard(null); }}
+          onClose={() => setFutureCard(null)}
+        />
+      )}
     </AppShell>
+  );
+}
+
+function EditCardModal({ card, householdId, committedValue, onClose }: { card: Card; householdId: string; committedValue: number; onClose: () => void; }) {
+  const [form, setForm] = useState({
+    limit: String(card.limit || 0).replace(".", ","),
+    closingDay: String(card.closingDay || 28),
+    dueDay: String(card.dueDay || 7),
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const newLimit = parseMoney(form.limit);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (newLimit < 0) { setError("Informe um limite válido."); return; }
+    setSaving(true);
+    setError("");
+    try {
+      await updateCardSettings(householdId, card.id, {
+        limit: form.limit,
+        closingDay: form.closingDay,
+        dueDay: form.dueDay,
+      });
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível atualizar o cartão.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <form className="modal" onSubmit={submit} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <span className="eyebrow">Configurações do cartão</span>
+            <h2>{card.name}</h2>
+            <p>Atualize limite, fechamento e vencimento sem precisar excluir o cartão.</p>
+          </div>
+          <button type="button" onClick={onClose}><X /></button>
+        </div>
+
+        <div className="form-grid">
+          <label>Limite total
+            <input required inputMode="decimal" value={form.limit} onChange={(e) => setForm({ ...form, limit: e.target.value })} />
+          </label>
+          <label>Dia de fechamento
+            <input required type="number" min="1" max="31" value={form.closingDay} onChange={(e) => setForm({ ...form, closingDay: e.target.value })} />
+          </label>
+          <label>Dia de vencimento
+            <input required type="number" min="1" max="31" value={form.dueDay} onChange={(e) => setForm({ ...form, dueDay: e.target.value })} />
+          </label>
+          <div className="card-edit-summary">
+            <span>Comprometido atualmente</span>
+            <strong>{brl(committedValue)}</strong>
+            <small>Disponível após alteração: {brl(Math.max(0, newLimit - committedValue))}</small>
+          </div>
+        </div>
+
+        <div className="notice">
+          O novo <b>dia de vencimento</b> será aplicado às faturas abertas já provisionadas. O novo <b>dia de fechamento</b> passa a valer para compras lançadas daqui para frente, sem mover compras antigas de uma fatura para outra.
+        </div>
+        {error && <div className="error-box">{error}</div>}
+        <button className="primary-btn wide" disabled={saving}>{saving ? "Atualizando..." : "Salvar alterações"}</button>
+      </form>
+    </div>
+  );
+}
+
+function FutureInvoicesModal({ card, purchases, invoices, currentMonth, onOpenMonth, onClose }: { card: Card; purchases: Transaction[]; invoices: Transaction[]; currentMonth: string; onOpenMonth: (key: string) => void; onClose: () => void; }) {
+  const cardPurchases = useMemo(
+    () => purchases.filter((t) => (t.sourceCardId || t.cardId) === card.id && Boolean(t.invoiceMonth) && (t.invoiceMonth || "") >= currentMonth),
+    [purchases, card.id, currentMonth]
+  );
+  const cardInvoices = useMemo(
+    () => invoices.filter((t) => (t.sourceCardId || t.cardId) === card.id && Boolean(t.invoiceMonth)),
+    [invoices, card.id]
+  );
+  const months = useMemo(() => {
+    const keys = Array.from(new Set(cardPurchases.map((t) => t.invoiceMonth || "").filter(Boolean))).sort();
+    return keys.slice(0, 12);
+  }, [cardPurchases]);
+
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div className="modal future-invoices-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div>
+            <span className="eyebrow">Próximos meses</span>
+            <h2>Faturas futuras · {card.name}</h2>
+            <p>Veja quais despesas já estão comprometidas em cada fatura antes do vencimento.</p>
+          </div>
+          <button type="button" onClick={onClose}><X /></button>
+        </div>
+
+        {months.length ? (
+          <div className="future-invoice-list">
+            {months.map((key) => {
+              const items = cardPurchases.filter((t) => t.invoiceMonth === key).sort((a, b) => (a.installmentNumber || 0) - (b.installmentNumber || 0));
+              const invoice = cardInvoices.find((t) => t.invoiceMonth === key);
+              const total = items.reduce((sum, item) => sum + Number(item.amountPlanned || 0), 0);
+              const dueDate = invoice?.dueDate || cardInvoiceSchedule(card, `${key}-01`, key).dueDate;
+              return (
+                <section className="future-invoice-month" key={key}>
+                  <div className="future-invoice-head">
+                    <div>
+                      <span>{monthLabelFromKey(key)}</span>
+                      <strong>{brl(total)}</strong>
+                      <small>Vencimento {new Date(`${dueDate}T12:00:00`).toLocaleDateString("pt-BR")}</small>
+                    </div>
+                    <button type="button" className="soft-btn" onClick={() => onOpenMonth(key)}>Abrir fatura</button>
+                  </div>
+                  <div className="future-invoice-items">
+                    {items.map((item) => (
+                      <div key={item.id}>
+                        <div>
+                          <strong>{item.description}</strong>
+                          <small>{item.category} · parcela {item.installmentNumber}/{item.installmentTotal}</small>
+                        </div>
+                        <strong>{brl(item.amountPlanned)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        ) : (
+          <Empty text="Nenhuma despesa já provisionada nas próximas faturas deste cartão." />
+        )}
+      </div>
+    </div>
   );
 }
 

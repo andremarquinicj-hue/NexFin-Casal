@@ -203,6 +203,49 @@ async function getCard(householdId:string, cardId:string){
   return { id: snap.id, ...snap.data() } as Card;
 }
 
+export async function updateCardSettings(
+  householdId:string,
+  cardId:string,
+  payload:{limit:number|string;closingDay:number|string;dueDay:number|string}
+){
+  const s=getFirebaseServices(); if(!s) throw new Error("Firebase não configurado");
+  const limit=parseMoney(payload.limit);
+  const closingDay=Math.max(1,Math.min(31,Math.round(Number(payload.closingDay||1))));
+  const dueDay=Math.max(1,Math.min(31,Math.round(Number(payload.dueDay||1))));
+  if(limit<0) throw new Error("Informe um limite válido.");
+
+  const cardRef=doc(s.db,"households",householdId,"cards",cardId);
+  const cardSnap=await getDoc(cardRef);
+  if(!cardSnap.exists()) throw new Error("Cartão não encontrado.");
+
+  await updateDoc(cardRef,{limit,closingDay,dueDay,updatedAt:serverTimestamp()});
+
+  // O novo dia de vencimento deve refletir nas faturas já provisionadas.
+  // O novo fechamento vale apenas para compras lançadas daqui para frente,
+  // preservando a fatura à qual cada compra antiga já foi atribuída.
+  const txQuery=query(
+    collection(s.db,"households",householdId,"transactions"),
+    where("sourceCardId","==",cardId)
+  );
+  const txSnap=await getDocs(txQuery);
+  if(txSnap.empty) return;
+  const updates=txSnap.docs.filter(d=>{
+    const tx=d.data() as Transaction;
+    if(!tx.invoiceMonth) return false;
+    if(tx.isCardInvoice===true && (tx.status==="paid" || tx.status==="cancelled")) return false;
+    return true;
+  });
+  for(let start=0;start<updates.length;start+=400){
+    const batch=writeBatch(s.db);
+    updates.slice(start,start+400).forEach(d=>{
+      const tx=d.data() as Transaction;
+      const dueDate=cardInvoiceSchedule({closingDay,dueDay},`${tx.invoiceMonth}-01`,tx.invoiceMonth).dueDate;
+      batch.update(d.ref,{dueDate,updatedAt:serverTimestamp()});
+    });
+    await batch.commit();
+  }
+}
+
 export async function createCardPurchase(
   householdId:string,
   payload:{cardId:string;description:string;totalAmount:number|string;installments:number|string;purchaseDate:string;category:string;createdBy:string;notes?:string;firstInvoiceMonth?:string}
