@@ -17,7 +17,7 @@ import {
 } from "firebase/firestore";
 import { getFirebaseServices } from "./firebase";
 import { Transaction, Card } from "./types";
-import { addMonths, monthLabelFromKey, monthKey, parseMoney, shiftMonthKey } from "./finance";
+import { addMonths, cardInvoiceSchedule, monthLabelFromKey, monthKey, parseMoney, shiftMonthKey } from "./finance";
 
 export function listenCollection<T>(householdId: string, name: string, cb: (items:T[])=>void) {
   const s = getFirebaseServices(); if (!s || !householdId) return () => {};
@@ -189,8 +189,6 @@ export async function getHouseholdDocument(householdId:string, name:string, id:s
   return getDoc(doc(s.db,"households",householdId,name,id));
 }
 
-function pad2(value:number){ return String(Math.max(1, Math.min(28, value))).padStart(2, "0"); }
-
 function splitInstallments(total:number, installments:number){
   const cents = Math.round(total * 100);
   const base = Math.floor(cents / installments);
@@ -205,16 +203,9 @@ async function getCard(householdId:string, cardId:string){
   return { id: snap.id, ...snap.data() } as Card;
 }
 
-function getInvoiceMonthForPurchase(purchaseDate:string, closingDay:number){
-  let invoiceMonth = monthKey(new Date(`${purchaseDate}T12:00:00`));
-  const purchaseDay = Number(purchaseDate.split("-")[2] || 1);
-  if (purchaseDay > closingDay) invoiceMonth = shiftMonthKey(invoiceMonth, 1);
-  return invoiceMonth;
-}
-
 export async function createCardPurchase(
   householdId:string,
-  payload:{cardId:string;description:string;totalAmount:number|string;installments:number|string;purchaseDate:string;category:string;createdBy:string;notes?:string}
+  payload:{cardId:string;description:string;totalAmount:number|string;installments:number|string;purchaseDate:string;category:string;createdBy:string;notes?:string;firstInvoiceMonth?:string}
 ){
   const s=getFirebaseServices(); if(!s) throw new Error("Firebase não configurado");
   const card = await getCard(householdId, payload.cardId);
@@ -222,13 +213,13 @@ export async function createCardPurchase(
   const installments = Math.max(1, Math.round(Number(payload.installments || 1)));
   if (totalAmount <= 0) throw new Error("Informe o valor total da compra.");
   const groupId = `${payload.cardId}-${Date.now()}`;
-  const firstInvoiceMonth = getInvoiceMonthForPurchase(payload.purchaseDate, Number(card.closingDay || 28));
+  const firstInvoiceMonth = cardInvoiceSchedule(card, payload.purchaseDate, payload.firstInvoiceMonth).invoiceMonth;
   const amounts = splitInstallments(totalAmount, installments);
   const batch = writeBatch(s.db);
 
   amounts.forEach((amount, index) => {
     const invoiceMonth = shiftMonthKey(firstInvoiceMonth, index);
-    const dueDate = `${invoiceMonth}-${pad2(Number(card.dueDay || 7))}`;
+    const dueDate = cardInvoiceSchedule(card, `${invoiceMonth}-01`, invoiceMonth).dueDate;
     const ref = doc(collection(s.db, "households", householdId, "transactions"));
     batch.set(ref, {
       description: payload.description,
@@ -242,6 +233,7 @@ export async function createCardPurchase(
       cardId: payload.cardId,
       sourceCardId: payload.cardId,
       invoiceMonth,
+      purchaseDate: payload.purchaseDate,
       installmentGroupId: groupId,
       installmentNumber: index + 1,
       installmentTotal: installments,
@@ -261,6 +253,29 @@ export async function createCardPurchase(
   }
 
   return { firstInvoiceMonth, installments, groupId };
+}
+
+export async function removeCardPurchaseGroup(householdId:string, installmentGroupId:string){
+  const s=getFirebaseServices(); if(!s) throw new Error("Firebase não configurado");
+  const q=query(
+    collection(s.db,"households",householdId,"transactions"),
+    where("installmentGroupId","==",installmentGroupId)
+  );
+  const snap=await getDocs(q);
+  if(snap.empty) return;
+  const affected=new Set<string>();
+  let sourceCardId="";
+  const batch=writeBatch(s.db);
+  snap.docs.forEach(d=>{
+    const data=d.data() as Transaction;
+    if(data.invoiceMonth) affected.add(data.invoiceMonth);
+    sourceCardId=data.sourceCardId||data.cardId||sourceCardId;
+    batch.delete(d.ref);
+  });
+  await batch.commit();
+  if(sourceCardId){
+    for(const invoiceMonth of Array.from(affected)) await syncCardInvoiceForMonth(householdId,sourceCardId,invoiceMonth);
+  }
 }
 
 export async function syncCardInvoiceForMonth(householdId:string, cardId:string, invoiceMonth:string) {
@@ -295,7 +310,7 @@ export async function syncCardInvoiceForMonth(householdId:string, cardId:string,
     return;
   }
 
-  const dueDate = `${invoiceMonth}-${pad2(Number(card.dueDay || 7))}`;
+  const dueDate = cardInvoiceSchedule(card, `${invoiceMonth}-01`, invoiceMonth).dueDate;
   const description = `Fatura ${card.name} · ${monthLabelFromKey(invoiceMonth)}`;
   const payload = {
     description,

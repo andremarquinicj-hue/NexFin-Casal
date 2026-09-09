@@ -1,12 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { CreditCard, Plus, ShoppingBag, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { CheckCircle2, CreditCard, Plus, ShoppingBag, Trash2, X } from "lucide-react";
 import AppShell from "@/components/AppShell";
 import Empty from "@/components/Empty";
 import { useHouseholdData } from "@/components/useHouseholdData";
-import { brl, monthKey, monthLabelFromKey, parseMoney } from "@/lib/finance";
-import { createCardPurchase, createItem, removeItem } from "@/lib/firestore";
+import { brl, cardInvoiceSchedule, monthKey, monthLabelFromKey, parseMoney, shiftMonthKey } from "@/lib/finance";
+import { createCardPurchase, createItem, removeCardPurchaseGroup, removeItem } from "@/lib/firestore";
 import { Card, Transaction } from "@/lib/types";
 import { useAuth } from "@/components/AuthProvider";
 
@@ -156,14 +156,15 @@ export default function Cartoes() {
                 </div>
                 {invoiceItems.length ? (
                   <div className="data-table">
-                    <div className="table-head" style={{ minWidth: 700, gridTemplateColumns: "2fr 1fr 1fr 1fr" }}>
+                    <div className="table-head" style={{ minWidth: 760, gridTemplateColumns: "2fr 1fr 1fr 1fr 60px" }}>
                       <span>Compra</span>
                       <span>Categoria</span>
                       <span>Parcela</span>
                       <span>Valor</span>
+                      <span></span>
                     </div>
                     {invoiceItems.map((item) => (
-                      <div className="table-row" key={item.id} style={{ minWidth: 700, gridTemplateColumns: "2fr 1fr 1fr 1fr" }}>
+                      <div className="table-row" key={item.id} style={{ minWidth: 760, gridTemplateColumns: "2fr 1fr 1fr 1fr 60px" }}>
                         <div>
                           <strong>{item.description}</strong>
                           <small>Vence em {new Date(`${item.dueDate}T12:00:00`).toLocaleDateString("pt-BR")}</small>
@@ -171,13 +172,23 @@ export default function Cartoes() {
                         <span>{item.category}</span>
                         <span>{item.installmentNumber}/{item.installmentTotal}</span>
                         <strong>{brl(item.amountPlanned)}</strong>
+                        <button
+                          type="button"
+                          className="invoice-delete-btn"
+                          title="Excluir compra e parcelas futuras"
+                          onClick={async()=>{
+                            if(!item.installmentGroupId) return;
+                            if(confirm(`Excluir ${item.description} e todas as parcelas desta compra?`)) await removeCardPurchaseGroup(householdId,item.installmentGroupId);
+                          }}
+                        ><Trash2/></button>
                       </div>
                     ))}
-                    <div className="table-row" style={{ minWidth: 700, gridTemplateColumns: "2fr 1fr 1fr 1fr", background: "#f8fafc", fontWeight: 800 }}>
+                    <div className="table-row" style={{ minWidth: 760, gridTemplateColumns: "2fr 1fr 1fr 1fr 60px", background: "#f8fafc", fontWeight: 800 }}>
                       <div><strong>Total da fatura</strong><small>Valor que aparecerá em Movimentações</small></div>
                       <span>—</span>
                       <span>—</span>
                       <strong>{brl(invoiceTotal)}</strong>
+                      <span></span>
                     </div>
                   </div>
                 ) : (
@@ -210,19 +221,37 @@ function PurchaseModal({ card, householdId, createdBy, onClose }: { card: Card; 
     category: "Compras",
     notes: "",
   });
+  const [invoiceMonthOverride, setInvoiceMonthOverride] = useState("");
+  const [reviewing, setReviewing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const preview = useMemo(() => {
+  const installmentPreview = useMemo(() => {
     const total = parseMoney(form.totalAmount);
     const installments = Math.max(1, Number(form.installments || 1));
     return total > 0 ? total / installments : 0;
   }, [form.totalAmount, form.installments]);
 
+  const autoSchedule = useMemo(() => cardInvoiceSchedule(card, form.purchaseDate), [card, form.purchaseDate]);
+  const schedule = useMemo(
+    () => cardInvoiceSchedule(card, form.purchaseDate, invoiceMonthOverride || undefined),
+    [card, form.purchaseDate, invoiceMonthOverride]
+  );
+  const invoiceOptions = useMemo(() => {
+    const base = autoSchedule.invoiceMonth;
+    return [0, 1, 2].map((offset) => shiftMonthKey(base, offset));
+  }, [autoSchedule.invoiceMonth]);
+
+  useEffect(() => setReviewing(false), [form.description, form.totalAmount, form.installments, form.purchaseDate, form.category, form.notes, invoiceMonthOverride]);
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
     setError("");
+    const total = parseMoney(form.totalAmount);
+    if (total <= 0) { setError("Informe o valor total da compra."); return; }
+    if (!reviewing) { setReviewing(true); return; }
+
+    setSaving(true);
     try {
       await createCardPurchase(householdId, {
         cardId: card.id,
@@ -233,6 +262,7 @@ function PurchaseModal({ card, householdId, createdBy, onClose }: { card: Card; 
         category: form.category,
         notes: form.notes,
         createdBy,
+        firstInvoiceMonth: schedule.invoiceMonth,
       });
       onClose();
     } catch (err) {
@@ -242,6 +272,9 @@ function PurchaseModal({ card, householdId, createdBy, onClose }: { card: Card; 
     }
   }
 
+  const dueLabel = new Date(`${schedule.dueDate}T12:00:00`).toLocaleDateString("pt-BR");
+  const closingLabel = new Date(`${schedule.closingDate}T12:00:00`).toLocaleDateString("pt-BR");
+
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <form className="modal" onSubmit={submit} onMouseDown={(e) => e.stopPropagation()}>
@@ -249,7 +282,7 @@ function PurchaseModal({ card, householdId, createdBy, onClose }: { card: Card; 
           <div>
             <span className="eyebrow">Compra no cartão</span>
             <h2>{card.name}</h2>
-            <p>Cadastre o valor total e o número de parcelas. O NexFin lança automaticamente a fatura do cartão em Movimentações.</p>
+            <p>O NexFin calcula a fatura pela data da compra, fechamento e vencimento do cartão. Antes de gravar, você confirma o mês.</p>
           </div>
           <button type="button" onClick={onClose}><X /></button>
         </div>
@@ -260,43 +293,61 @@ function PurchaseModal({ card, householdId, createdBy, onClose }: { card: Card; 
           </label>
           <label>Categoria
             <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-              {[
-                "Compras",
-                "Mercado",
-                "Lazer",
-                "Casa",
-                "Saúde",
-                "Educação",
-                "Veículo",
-                "Assinaturas",
-                "Outros",
-              ].map((option) => <option key={option} value={option}>{option}</option>)}
+              {["Compras","Mercado","Lazer","Casa","Saúde","Educação","Veículo","Assinaturas","Outros"].map((option) => <option key={option} value={option}>{option}</option>)}
             </select>
           </label>
           <label>Valor total
             <input required inputMode="decimal" value={form.totalAmount} onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} placeholder="0,00" />
           </label>
           <label>Parcelas
-            <input required inputMode="numeric" value={form.installments} onChange={(e) => setForm({ ...form, installments: e.target.value })} placeholder="1" />
+            <input required inputMode="numeric" min="1" max="120" type="number" value={form.installments} onChange={(e) => setForm({ ...form, installments: e.target.value })} />
           </label>
           <label>Data da compra
-            <input type="date" required value={form.purchaseDate} onChange={(e) => setForm({ ...form, purchaseDate: e.target.value })} />
+            <input type="date" required value={form.purchaseDate} onChange={(e) => { setForm({ ...form, purchaseDate: e.target.value }); setInvoiceMonthOverride(""); }} />
           </label>
           <label>Observações
             <input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Opcional" />
           </label>
         </div>
 
-        <div className="planned-reference">
-          <span>Prévia por parcela</span>
-          <strong>{brl(preview)}</strong>
+        <div className="card-invoice-preview">
+          <div>
+            <span>Fatura calculada</span>
+            <strong>{schedule.invoiceLabel}</strong>
+            <small>Fecha em {closingLabel} · vence em {dueLabel}</small>
+          </div>
+          <div>
+            <span>Parcela estimada</span>
+            <strong>{brl(installmentPreview)}</strong>
+            <small>{Math.max(1, Number(form.installments || 1))}x</small>
+          </div>
         </div>
-        <div className="settle-impact">
-          <ShoppingBag />
-          <p>Ao salvar, o NexFin criará as parcelas futuras desta compra e somará automaticamente a parcela do mês na fatura do cartão. Assim, em Movimentações aparecerá a fatura mensal pronta para pagamento.</p>
-        </div>
+
+        <label>Em qual fatura a 1ª parcela virá?
+          <select value={invoiceMonthOverride || autoSchedule.invoiceMonth} onChange={(e) => setInvoiceMonthOverride(e.target.value)}>
+            {invoiceOptions.map((key) => <option key={key} value={key}>{monthLabelFromKey(key)}</option>)}
+          </select>
+          <small className="field-help">O NexFin já sugere automaticamente. Se o app do banco mostrar outra fatura — especialmente no dia do fechamento — você pode ajustar antes de confirmar.</small>
+        </label>
+
+        {schedule.onClosingDay && invoiceMonthOverride === "" && (
+          <div className="warning-box">Esta compra foi informada no mesmo dia do fechamento. A operadora pode jogar a compra para esta fatura ou para a próxima conforme o horário de processamento. Confirme no aplicativo do cartão.</div>
+        )}
+
+        {reviewing ? (
+          <div className="invoice-confirm-box">
+            <CheckCircle2 />
+            <div>
+              <strong>Confirme antes de lançar</strong>
+              <p>Esta compra entrará na fatura de <b>{schedule.invoiceLabel}</b>, com vencimento em <b>{dueLabel}</b>. {Number(form.installments || 1) > 1 ? `As próximas ${Math.max(0, Number(form.installments || 1) - 1)} parcelas serão lançadas nas faturas seguintes.` : "É uma compra em 1x."}</p>
+            </div>
+          </div>
+        ) : (
+          <div className="notice">Confira o mês da fatura acima. Ao continuar, o NexFin mostrará uma confirmação final antes de gravar.</div>
+        )}
+
         {error && <div className="error-box">{error}</div>}
-        <button className="primary-btn wide" disabled={saving}>{saving ? "Salvando..." : "Salvar compra"}</button>
+        <button className="primary-btn wide" disabled={saving}>{saving ? "Salvando..." : reviewing ? `Confirmar na fatura de ${schedule.invoiceLabel}` : "Revisar fatura antes de salvar"}</button>
       </form>
     </div>
   );

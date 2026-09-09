@@ -1,4 +1,4 @@
-import { Transaction } from "./types";
+import { Card, Transaction } from "./types";
 
 export const brl = (v: number) => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v || 0);
 export const monthKey = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}`;
@@ -14,6 +14,43 @@ export const parseMoney = (value: string | number) => {
 export const monthKeyToDate = (key: string) => { const [y,m] = key.split("-").map(Number); return new Date(y, m-1, 1); };
 export const shiftMonthKey = (key: string, months: number) => { const d = monthKeyToDate(key); d.setMonth(d.getMonth()+months); return monthKey(d); };
 export const monthLabelFromKey = (key: string) => monthLabel(monthKeyToDate(key));
+
+function daysInMonth(year:number, month:number){ return new Date(year, month, 0).getDate(); }
+function dateForMonthDay(key:string, day:number){
+  const [year,month]=key.split("-").map(Number);
+  const safeDay=Math.max(1,Math.min(Number(day||1),daysInMonth(year,month)));
+  return `${year}-${String(month).padStart(2,"0")}-${String(safeDay).padStart(2,"0")}`;
+}
+
+export function cardInvoiceSchedule(card: Pick<Card,"closingDay"|"dueDay">, purchaseDate:string, forcedInvoiceMonth?:string){
+  const purchaseMonth=purchaseDate.slice(0,7);
+  const closingDay=Math.max(1,Math.min(31,Number(card.closingDay||28)));
+  const dueDay=Math.max(1,Math.min(31,Number(card.dueDay||7)));
+  const closingDateFor=(invoiceMonth:string)=>{
+    const closingMonth=closingDay>dueDay?shiftMonthKey(invoiceMonth,-1):invoiceMonth;
+    return dateForMonthDay(closingMonth,closingDay);
+  };
+  const dueDateFor=(invoiceMonth:string)=>dateForMonthDay(invoiceMonth,dueDay);
+  let invoiceMonth=forcedInvoiceMonth||purchaseMonth;
+  if(!forcedInvoiceMonth){
+    let found=false;
+    for(let offset=0;offset<4;offset++){
+      const candidate=shiftMonthKey(purchaseMonth,offset);
+      if(purchaseDate<=closingDateFor(candidate)){ invoiceMonth=candidate; found=true; break; }
+    }
+    if(!found) invoiceMonth=shiftMonthKey(purchaseMonth,4);
+  }
+  const closingDate=closingDateFor(invoiceMonth);
+  const dueDate=dueDateFor(invoiceMonth);
+  const purchaseDay=Number(purchaseDate.split("-")[2]||1);
+  return {
+    invoiceMonth,
+    invoiceLabel:monthLabelFromKey(invoiceMonth),
+    closingDate,
+    dueDate,
+    onClosingDay:purchaseDay===closingDay,
+  };
+}
 
 // Fluxo de caixa: compras individuais no cartão NÃO são despesas bancárias do mês.
 // A saída de dinheiro acontece somente quando a fatura consolidada é paga.
