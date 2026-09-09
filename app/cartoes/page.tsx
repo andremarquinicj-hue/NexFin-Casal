@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, CreditCard, Plus, ShoppingBag, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, CreditCard, Plus, ShoppingBag, Trash2, X } from "lucide-react";
 import AppShell from "@/components/AppShell";
 import Empty from "@/components/Empty";
 import { useHouseholdData } from "@/components/useHouseholdData";
@@ -15,41 +15,84 @@ export default function Cartoes() {
   const { profile } = useAuth();
   const [openCard, setOpenCard] = useState(false);
   const [purchaseCard, setPurchaseCard] = useState<Card | null>(null);
+  const [selectedInvoiceMonth, setSelectedInvoiceMonth] = useState(monthKey());
   const [form, setForm] = useState({ name: "", bank: "", holder: "", limit: "", closingDay: "28", dueDay: "7" });
 
   const currentMonth = monthKey();
-  const invoiceTransactions = useMemo(
-    () => transactions.filter((t) => t.isCardInvoice === true && t.invoiceMonth === currentMonth && t.status !== "cancelled"),
-    [transactions, currentMonth]
+  const allInvoiceTransactions = useMemo(
+    () => transactions.filter((t) => t.isCardInvoice === true && t.status !== "cancelled"),
+    [transactions]
+  );
+  const allCardPurchases = useMemo(
+    () => transactions.filter((t) => t.type === "card" && t.status !== "cancelled"),
+    [transactions]
   );
 
-  const currentMonthPurchases = useMemo(
-    () => transactions.filter((t) => t.type === "card" && t.invoiceMonth === currentMonth && t.status !== "cancelled"),
-    [transactions, currentMonth]
+  const selectedInvoiceTransactions = useMemo(
+    () => allInvoiceTransactions.filter((t) => t.invoiceMonth === selectedInvoiceMonth),
+    [allInvoiceTransactions, selectedInvoiceMonth]
+  );
+  const selectedMonthPurchases = useMemo(
+    () => allCardPurchases.filter((t) => t.invoiceMonth === selectedInvoiceMonth),
+    [allCardPurchases, selectedInvoiceMonth]
   );
 
-  const spentByCard = useMemo(() => {
-    const map: Record<string, number> = {};
-    invoiceTransactions.forEach((t) => {
-      const key = t.sourceCardId || t.cardId || "";
-      map[key] = (map[key] || 0) + Number(t.amountPlanned || 0);
+  const invoiceByCardMonth = useMemo(() => {
+    const map: Record<string, Transaction> = {};
+    allInvoiceTransactions.forEach((t) => {
+      const cardId = t.sourceCardId || t.cardId || "";
+      if (!cardId || !t.invoiceMonth) return;
+      map[`${cardId}:${t.invoiceMonth}`] = t;
     });
     return map;
-  }, [invoiceTransactions]);
+  }, [allInvoiceTransactions]);
+
+  const invoiceAmountByCardMonth = useMemo(() => {
+    const map: Record<string, number> = {};
+    allInvoiceTransactions.forEach((t) => {
+      const cardId = t.sourceCardId || t.cardId || "";
+      if (!cardId || !t.invoiceMonth) return;
+      map[`${cardId}:${t.invoiceMonth}`] = Number(t.amountPlanned || 0);
+    });
+    return map;
+  }, [allInvoiceTransactions]);
+
+  const committedByCard = useMemo(() => {
+    const map: Record<string, number> = {};
+    allCardPurchases.forEach((t) => {
+      const cardId = t.sourceCardId || t.cardId || "";
+      if (!cardId || !t.invoiceMonth) return;
+      const invoice = invoiceByCardMonth[`${cardId}:${t.invoiceMonth}`];
+      // A compra compromete o limite enquanto a fatura correspondente ainda não foi paga.
+      if (invoice?.status === "paid" || invoice?.status === "cancelled") return;
+      map[cardId] = (map[cardId] || 0) + Number(t.amountPlanned || 0);
+    });
+    return map;
+  }, [allCardPurchases, invoiceByCardMonth]);
+
+  const openInvoiceMonthsByCard = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    allInvoiceTransactions.forEach((t) => {
+      const cardId = t.sourceCardId || t.cardId || "";
+      if (!cardId || !t.invoiceMonth || t.status === "paid" || t.status === "cancelled") return;
+      map[cardId] ||= [];
+      if (!map[cardId].includes(t.invoiceMonth)) map[cardId].push(t.invoiceMonth);
+    });
+    Object.values(map).forEach((months) => months.sort());
+    return map;
+  }, [allInvoiceTransactions]);
 
   const activePurchasesByCard = useMemo(() => {
     const grouped: Record<string, Record<string, Transaction[]>> = {};
-    transactions
-      .filter((t) => t.type === "card" && t.status !== "cancelled")
-      .forEach((t) => {
-        const cardId = t.sourceCardId || t.cardId || "";
-        if (!cardId || !t.installmentGroupId) return;
-        grouped[cardId] ||= {};
-        grouped[cardId][t.installmentGroupId] ||= [];
-        grouped[cardId][t.installmentGroupId].push(t);
-      });
+    allCardPurchases.forEach((t) => {
+      const cardId = t.sourceCardId || t.cardId || "";
+      if (!cardId || !t.installmentGroupId) return;
+      grouped[cardId] ||= {};
+      grouped[cardId][t.installmentGroupId] ||= [];
+      grouped[cardId][t.installmentGroupId].push(t);
+    });
     return grouped;
-  }, [transactions]);
+  }, [allCardPurchases]);
 
   async function saveCard(e: React.FormEvent) {
     e.preventDefault();
@@ -63,14 +106,22 @@ export default function Cartoes() {
     setOpenCard(false);
   }
 
+  const selectedMonthTotal = selectedInvoiceTransactions.reduce((s, t) => s + Number(t.amountPlanned || 0), 0);
+
   return (
-    <AppShell title="Cartões" subtitle="Cadastre compras parceladas e deixe a fatura do mês ser lançada automaticamente">
+    <AppShell title="Cartões" subtitle="Faturas atuais e futuras, compras parceladas e limite comprometido em um só lugar">
       <div className="section-actions">
         <div>
-          <strong>Faturas previstas no mês</strong>
-          <span>{brl(invoiceTransactions.reduce((s, t) => s + Number(t.amountPlanned || 0), 0))}</span>
+          <strong>Faturas de {monthLabelFromKey(selectedInvoiceMonth)}</strong>
+          <span>{brl(selectedMonthTotal)}</span>
         </div>
         <button className="soft-btn" onClick={() => setOpenCard(!openCard)}><Plus />Adicionar cartão</button>
+      </div>
+
+      <div className="month-toolbar" style={{ marginBottom: 18 }}>
+        <button type="button" onClick={() => setSelectedInvoiceMonth(shiftMonthKey(selectedInvoiceMonth, -1))}><ArrowLeft /></button>
+        <div><span>Fatura visualizada</span><strong>{monthLabelFromKey(selectedInvoiceMonth)}</strong></div>
+        <button type="button" onClick={() => setSelectedInvoiceMonth(shiftMonthKey(selectedInvoiceMonth, 1))}><ArrowRight /></button>
       </div>
 
       {openCard && (
@@ -91,7 +142,14 @@ export default function Cartoes() {
 
       <div className="cards-grid">
         {cards.map((c) => {
-          const invoiceValue = spentByCard[c.id] || 0;
+          const selectedInvoiceValue = invoiceAmountByCardMonth[`${c.id}:${selectedInvoiceMonth}`] || 0;
+          const committedValue = committedByCard[c.id] || 0;
+          const availableLimit = Math.max(0, Number(c.limit || 0) - committedValue);
+          const openMonths = openInvoiceMonthsByCard[c.id] || [];
+          const nextOpenMonth = openMonths.find((key) => key >= currentMonth) || openMonths[0] || "";
+          const nextOpenValue = nextOpenMonth ? (invoiceAmountByCardMonth[`${c.id}:${nextOpenMonth}`] || 0) : 0;
+          const followingMonth = shiftMonthKey(selectedInvoiceMonth, 1);
+          const followingValue = invoiceAmountByCardMonth[`${c.id}:${followingMonth}`] || 0;
           const grouped = Object.values(activePurchasesByCard[c.id] || {});
           const activeGroups = grouped
             .map((group) => [...group].sort((a, b) => (a.installmentNumber || 0) - (b.installmentNumber || 0)))
@@ -104,10 +162,15 @@ export default function Cartoes() {
               <h3>{c.name}</h3>
               <p>{c.holder}</p>
               <div className="limit-row">
-                <div><small>Fatura prevista</small><strong>{brl(invoiceValue)}</strong></div>
-                <div><small>Limite disponível</small><strong>{brl(Math.max(0, c.limit - invoiceValue))}</strong></div>
+                <div><small>Fatura de {monthLabelFromKey(selectedInvoiceMonth)}</small><strong>{brl(selectedInvoiceValue)}</strong></div>
+                <div><small>Limite disponível</small><strong>{brl(availableLimit)}</strong></div>
               </div>
-              <div className="progress dark"><i style={{ width: `${Math.min(100, c.limit ? invoiceValue / c.limit * 100 : 0)}%` }} /></div>
+              <div className="progress dark"><i style={{ width: `${Math.min(100, c.limit ? committedValue / c.limit * 100 : 0)}%` }} /></div>
+              <div className="card-limit-summary">
+                <span>Limite comprometido: <b>{brl(committedValue)}</b></span>
+                {nextOpenMonth && <span>Próxima em aberto: <b>{monthLabelFromKey(nextOpenMonth)} · {brl(nextOpenValue)}</b></span>}
+                {followingValue > 0 && followingMonth !== nextOpenMonth && <span>Fatura seguinte: <b>{monthLabelFromKey(followingMonth)} · {brl(followingValue)}</b></span>}
+              </div>
               <small>Fecha dia {c.closingDay} · vence dia {c.dueDay}</small>
               <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
                 <button type="button" className="soft-btn" onClick={() => setPurchaseCard(c)}><ShoppingBag />Nova compra</button>
@@ -118,14 +181,18 @@ export default function Cartoes() {
                   <div className="transaction-list">
                     {activeGroups.slice(0, 3).map((group) => {
                       const first = group[0];
-                      const nextPending = group.find((item) => item.status !== "cancelled" && item.status !== "paid");
+                      const nextPending = group.find((item) => {
+                        if (!item.invoiceMonth) return true;
+                        const invoice = invoiceByCardMonth[`${c.id}:${item.invoiceMonth}`];
+                        return invoice?.status !== "paid" && invoice?.status !== "cancelled";
+                      });
                       return (
                         <div className="transaction-row" key={first.installmentGroupId} style={{ borderColor: "rgba(255,255,255,.08)" }}>
                           <div className="tx-main">
                             <strong style={{ color: "white" }}>{first.description}</strong>
-                            <span>{first.installmentNumber}/{first.installmentTotal} agora · próxima {nextPending ? `${nextPending.installmentNumber}/${nextPending.installmentTotal}` : "finalizada"}</span>
+                            <span>{nextPending ? `${nextPending.installmentNumber}/${nextPending.installmentTotal} · ${monthLabelFromKey(nextPending.invoiceMonth || currentMonth)}` : "Compra finalizada"}</span>
                           </div>
-                          <strong>{brl(first.amountPlanned)}</strong>
+                          <strong>{brl(nextPending?.amountPlanned || first.amountPlanned)}</strong>
                         </div>
                       );
                     })}
@@ -143,14 +210,14 @@ export default function Cartoes() {
       {cards.length > 0 && (
         <div style={{ marginTop: 18, display: "grid", gap: 18 }}>
           {cards.map((card) => {
-            const invoiceItems = currentMonthPurchases.filter((t) => (t.sourceCardId || t.cardId) === card.id);
+            const invoiceItems = selectedMonthPurchases.filter((t) => (t.sourceCardId || t.cardId) === card.id);
             const invoiceTotal = invoiceItems.reduce((sum, item) => sum + Number(item.amountPlanned || 0), 0);
             return (
-              <section className="panel" key={`invoice-${card.id}`}>
+              <section className="panel" key={`invoice-${card.id}-${selectedInvoiceMonth}`}>
                 <div className="panel-head">
                   <div>
-                    <h2>Fatura de {monthLabelFromKey(currentMonth)} · {card.name}</h2>
-                    <p>Cada gasto do cartão entra aqui com a respectiva parcela e o sistema já lança automaticamente a fatura do mês em Movimentações.</p>
+                    <h2>Fatura de {monthLabelFromKey(selectedInvoiceMonth)} · {card.name}</h2>
+                    <p>Use as setas acima para consultar setembro, outubro e os próximos meses. As compras futuras também entram no cálculo do limite disponível.</p>
                   </div>
                   <button className="soft-btn" onClick={() => setPurchaseCard(card)}><Plus />Adicionar compra</button>
                 </div>
@@ -192,7 +259,7 @@ export default function Cartoes() {
                     </div>
                   </div>
                 ) : (
-                  <Empty text="Nenhuma compra cadastrada para esta fatura ainda." />
+                  <Empty text={`Nenhuma compra cadastrada para a fatura de ${monthLabelFromKey(selectedInvoiceMonth)}.`} />
                 )}
               </section>
             );
