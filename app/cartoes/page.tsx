@@ -69,15 +69,22 @@ export default function Cartoes() {
     allCardPurchases.forEach((t) => {
       const cardId = t.sourceCardId || t.cardId || "";
       if (!cardId || !t.invoiceMonth) return;
-      // Parcela já liquidada pela fatura não compromete mais o limite.
-      if (t.status === "paid") return;
+      // O limite do cartão é comprometido no momento da compra, mesmo que a parcela
+      // pertença a uma fatura futura. Só deixa de comprometer quando a própria
+      // parcela é marcada como paga/cancelada.
+      if (t.status === "paid" || t.status === "cancelled") return;
+
+      // Compatibilidade apenas com faturas antigas já quitadas antes da rotina
+      // que passou a marcar as parcelas como pagas. Nunca usamos uma fatura futura
+      // como motivo para liberar limite, pois isso esconderia parcelas de meses
+      // seguintes (ex.: compra de outubro feita em setembro).
       const invoice = invoiceByCardMonth[`${cardId}:${t.invoiceMonth}`];
-      // Compatibilidade com faturas antigas que já estavam pagas antes desta atualização.
-      if (invoice?.status === "paid" || invoice?.status === "cancelled") return;
+      if (invoice?.status === "paid" && t.invoiceMonth <= currentMonth) return;
+
       map[cardId] = (map[cardId] || 0) + Number(t.amountPlanned || 0);
     });
     return map;
-  }, [allCardPurchases, invoiceByCardMonth]);
+  }, [allCardPurchases, invoiceByCardMonth, currentMonth]);
 
   const openInvoiceMonthsByCard = useMemo(() => {
     const map: Record<string, string[]> = {};
