@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, CalendarRange, CheckCircle2, CreditCard, Pencil, Plus, ShoppingBag, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Calculator, CalendarRange, CheckCircle2, CreditCard, Pencil, Plus, ShoppingBag, Trash2, X } from "lucide-react";
 import AppShell from "@/components/AppShell";
 import Empty from "@/components/Empty";
 import { useHouseholdData } from "@/components/useHouseholdData";
@@ -22,6 +22,7 @@ export default function Cartoes() {
   const [purchaseCard, setPurchaseCard] = useState<Card | null>(null);
   const [editingCard, setEditingCard] = useState<Card | null>(null);
   const [futureCard, setFutureCard] = useState<Card | null>(null);
+  const [auditCard, setAuditCard] = useState<Card | null>(null);
   const [selectedInvoiceMonth, setSelectedInvoiceMonth] = useState(monthKey());
   const [form, setForm] = useState({ name: "", bank: "", holder: "", limit: "", closingDay: "28", dueDay: "7" });
 
@@ -68,69 +69,123 @@ export default function Cartoes() {
     return map;
   }, [allInvoiceTransactions]);
 
-  const committedByCard = useMemo(() => {
-    // Regra do limite:
-    // 1) cada fatura aberta compromete o limite pelo valor integral;
-    // 2) compras individuais servem como fallback quando ainda não existe uma fatura consolidada;
-    // 3) lançamentos antigos do tipo "Gastos atual/Fatura" também entram como fallback;
-    // 4) se a fatura do mês já foi paga, aquele mês deixa de comprometer o limite.
-    // Isso evita tanto faltar parcelas futuras quanto somar compra + fatura duas vezes.
-    const byCardMonth: Record<string, { cardId:string; invoiceOpen:number; invoicePaid:boolean; purchasesOpen:number; legacyOpen:number }> = {};
+  const cardById = useMemo(() => Object.fromEntries(cards.map((card) => [card.id, card])), [cards]);
 
-    const ensure = (cardId:string, invoiceMonth:string) => {
-      const key = `${cardId}:${invoiceMonth}`;
-      byCardMonth[key] ||= { cardId, invoiceOpen:0, invoicePaid:false, purchasesOpen:0, legacyOpen:0 };
-      return byCardMonth[key];
+  const limitBreakdownByCard = useMemo(() => {
+    type MonthRow = {
+      cardId: string;
+      month: string;
+      purchases: number;
+      legacy: number;
+      invoice: number;
+      paidInvoice: boolean;
+      amount: number;
+      source: "purchases" | "legacy" | "invoice" | "paid";
     };
 
-    allInvoiceTransactions.forEach((t) => {
-      const cardId = t.sourceCardId || t.cardId || "";
-      if (!cardId || !t.invoiceMonth) return;
-      const row = ensure(cardId, t.invoiceMonth);
-      if (t.status === "paid") {
-        row.invoicePaid = true;
-        row.invoiceOpen = 0;
-      } else if (t.status !== "cancelled") {
-        row.invoiceOpen = Math.max(row.invoiceOpen, Number(t.amountPlanned || 0));
-      }
-    });
+    const rows: Record<string, MonthRow> = {};
+    const ensure = (cardId: string, month: string) => {
+      const key = `${cardId}:${month}`;
+      rows[key] ||= { cardId, month, purchases: 0, legacy: 0, invoice: 0, paidInvoice: false, amount: 0, source: "invoice" };
+      return rows[key];
+    };
 
+    // Compras detalhadas são a principal fonte de verdade do limite.
     allCardPurchases.forEach((t) => {
       const cardId = t.sourceCardId || t.cardId || "";
-      if (!cardId || !t.invoiceMonth || t.status === "paid" || t.status === "cancelled") return;
-      const row = ensure(cardId, t.invoiceMonth);
-      row.purchasesOpen += Number(t.amountPlanned || 0);
+      const month = t.invoiceMonth || (t.dueDate ? t.dueDate.slice(0, 7) : "");
+      if (!cardId || !month || t.status === "paid" || t.status === "cancelled") return;
+      ensure(cardId, month).purchases += Number(t.amountPlanned || 0);
     });
 
+    // Faturas consolidadas são fallback e também informam quais meses já foram pagos.
+    allInvoiceTransactions.forEach((t) => {
+      const cardId = t.sourceCardId || t.cardId || "";
+      const month = t.invoiceMonth || (t.dueDate ? t.dueDate.slice(0, 7) : "");
+      if (!cardId || !month) return;
+      const row = ensure(cardId, month);
+      if (t.status === "paid") row.paidInvoice = true;
+      else if (t.status !== "cancelled") row.invoice = Math.max(row.invoice, Number(t.amountPlanned || 0));
+    });
+
+    const paidExpenses = transactions.filter((t) => t.type === "expense" && t.status === "paid");
+    const normalized = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+    // Dados antigos como "Fatura" ou "Gastos atual" só entram se ainda estiverem realmente em aberto.
+    // Se existe um pagamento de fatura no mesmo mês e no mesmo valor, o saldo antigo é tratado como quitado.
     legacyCardSummaries.forEach((t) => {
       const cardId = t.sourceCardId || t.cardId || "";
-      const invoiceMonth = t.invoiceMonth || (t.dueDate ? t.dueDate.slice(0,7) : "");
-      if (!cardId || !invoiceMonth || t.status === "paid" || t.status === "cancelled") return;
-      const row = ensure(cardId, invoiceMonth);
-      row.legacyOpen += Number(t.amountPlanned || 0);
+      const month = t.invoiceMonth || (t.dueDate ? t.dueDate.slice(0, 7) : "");
+      if (!cardId || !month || t.status === "paid" || t.status === "cancelled") return;
+      const card = cardById[cardId];
+      const legacyAmount = Number(t.amountActual ?? t.amountPlanned ?? 0);
+      const settledByMatchingPayment = paidExpenses.some((payment) => {
+        const paymentMonth = payment.paidDate?.slice(0, 7) || payment.dueDate?.slice(0, 7) || "";
+        const paymentAmount = Number(payment.amountActual ?? payment.amountPlanned ?? 0);
+        if (paymentMonth !== month || Math.abs(paymentAmount - legacyAmount) > 0.05) return false;
+        const text = normalized(payment.description || "");
+        const cardName = normalized(card?.name || "");
+        const bankName = normalized(card?.bank || "");
+        return text.includes("fatura") || text.includes("cartao") || (cardName.length >= 3 && text.includes(cardName)) || (bankName.length >= 3 && text.includes(bankName));
+      });
+      if (!settledByMatchingPayment) ensure(cardId, month).legacy = Math.max(ensure(cardId, month).legacy, legacyAmount);
     });
 
+    Object.values(rows).forEach((row) => {
+      if (row.paidInvoice) {
+        row.amount = 0;
+        row.source = "paid";
+        return;
+      }
+      // Havendo itens detalhados ou saldo antigo, não usamos uma fatura consolidada possivelmente desatualizada.
+      // Isso evita diferenças residuais e duplicidade.
+      if (row.purchases > 0 || row.legacy > 0) {
+        if (row.legacy > row.purchases) {
+          row.amount = row.legacy;
+          row.source = "legacy";
+        } else {
+          row.amount = row.purchases;
+          row.source = "purchases";
+        }
+      } else {
+        row.amount = row.invoice;
+        row.source = "invoice";
+      }
+      row.amount = Number(row.amount.toFixed(2));
+    });
+
+    const grouped: Record<string, MonthRow[]> = {};
+    Object.values(rows).forEach((row) => {
+      grouped[row.cardId] ||= [];
+      grouped[row.cardId].push(row);
+    });
+    Object.values(grouped).forEach((items) => items.sort((a, b) => a.month.localeCompare(b.month)));
+    return grouped;
+  }, [allCardPurchases, allInvoiceTransactions, legacyCardSummaries, transactions, cardById]);
+
+  const committedByCard = useMemo(() => {
     const totals: Record<string, number> = {};
-    Object.values(byCardMonth).forEach((row) => {
-      if (row.invoicePaid) return;
-      const monthCommitment = Math.max(row.invoiceOpen, row.purchasesOpen, row.legacyOpen);
-      totals[row.cardId] = (totals[row.cardId] || 0) + monthCommitment;
+    Object.entries(limitBreakdownByCard).forEach(([cardId, rows]) => {
+      totals[cardId] = Number(rows.reduce((sum, row) => sum + row.amount, 0).toFixed(2));
     });
-
     return totals;
-  }, [allCardPurchases, allInvoiceTransactions, legacyCardSummaries]);
+  }, [limitBreakdownByCard]);
+
+  const effectiveInvoiceByCardMonth = useMemo(() => {
+    const map: Record<string, number> = {};
+    Object.values(limitBreakdownByCard).flat().forEach((row) => {
+      map[`${row.cardId}:${row.month}`] = row.amount;
+    });
+    return map;
+  }, [limitBreakdownByCard]);
 
   const openInvoiceMonthsByCard = useMemo(() => {
     const map: Record<string, string[]> = {};
-    allInvoiceTransactions.forEach((t) => {
-      const cardId = t.sourceCardId || t.cardId || "";
-      if (!cardId || !t.invoiceMonth || t.status === "paid" || t.status === "cancelled") return;
-      map[cardId] ||= [];
-      if (!map[cardId].includes(t.invoiceMonth)) map[cardId].push(t.invoiceMonth);
+    Object.entries(limitBreakdownByCard).forEach(([cardId, rows]) => {
+      map[cardId] = rows.filter((row) => row.amount > 0).map((row) => row.month).sort();
     });
-    Object.values(map).forEach((months) => months.sort());
     return map;
-  }, [allInvoiceTransactions]);
+  }, [limitBreakdownByCard]);
 
   const activePurchasesByCard = useMemo(() => {
     const grouped: Record<string, Record<string, Transaction[]>> = {};
@@ -157,7 +212,7 @@ export default function Cartoes() {
     setOpenCard(false);
   }
 
-  const selectedMonthTotal = selectedInvoiceTransactions.reduce((s, t) => s + Number(t.amountPlanned || 0), 0);
+  const selectedMonthTotal = cards.reduce((sum, card) => sum + (effectiveInvoiceByCardMonth[`${card.id}:${selectedInvoiceMonth}`] || 0), 0);
 
   return (
     <AppShell title="Cartões" subtitle="Faturas atuais e futuras, compras parceladas e limite comprometido em um só lugar">
@@ -193,14 +248,14 @@ export default function Cartoes() {
 
       <div className="cards-grid">
         {cards.map((c) => {
-          const selectedInvoiceValue = invoiceAmountByCardMonth[`${c.id}:${selectedInvoiceMonth}`] || 0;
+          const selectedInvoiceValue = effectiveInvoiceByCardMonth[`${c.id}:${selectedInvoiceMonth}`] || 0;
           const committedValue = committedByCard[c.id] || 0;
           const availableLimit = Math.max(0, Number(c.limit || 0) - committedValue);
           const openMonths = openInvoiceMonthsByCard[c.id] || [];
           const nextOpenMonth = openMonths.find((key) => key >= currentMonth) || openMonths[0] || "";
-          const nextOpenValue = nextOpenMonth ? (invoiceAmountByCardMonth[`${c.id}:${nextOpenMonth}`] || 0) : 0;
+          const nextOpenValue = nextOpenMonth ? (effectiveInvoiceByCardMonth[`${c.id}:${nextOpenMonth}`] || 0) : 0;
           const followingMonth = shiftMonthKey(selectedInvoiceMonth, 1);
-          const followingValue = invoiceAmountByCardMonth[`${c.id}:${followingMonth}`] || 0;
+          const followingValue = effectiveInvoiceByCardMonth[`${c.id}:${followingMonth}`] || 0;
           const grouped = Object.values(activePurchasesByCard[c.id] || {});
           const activeGroups = grouped
             .map((group) => [...group].sort((a, b) => (a.installmentNumber || 0) - (b.installmentNumber || 0)))
@@ -228,6 +283,7 @@ export default function Cartoes() {
                 <button type="button" className="soft-btn" onClick={() => setPurchaseCard(c)}><ShoppingBag />Nova compra</button>
                 <button type="button" className="soft-btn" onClick={() => setFutureCard(c)}><CalendarRange />Próximas faturas</button>
                 <button type="button" className="soft-btn" onClick={() => setEditingCard(c)}><Pencil />Editar cartão</button>
+                <button type="button" className="soft-btn" onClick={() => setAuditCard(c)}><Calculator />Conferir limite</button>
               </div>
               <div style={{ marginTop: 12 }}>
                 <small style={{ color: "#c7d2eb", display: "block", marginBottom: 6 }}>Compras parceladas ativas</small>
@@ -349,8 +405,41 @@ export default function Cartoes() {
           onClose={() => setFutureCard(null)}
         />
       )}
+      {auditCard && (
+        <LimitAuditModal
+          card={auditCard}
+          rows={limitBreakdownByCard[auditCard.id] || []}
+          onClose={() => setAuditCard(null)}
+        />
+      )}
     </AppShell>
   );
+}
+
+function LimitAuditModal({ card, rows, onClose }: { card: Card; rows: Array<{month:string; purchases:number; legacy:number; invoice:number; paidInvoice:boolean; amount:number; source:string}>; onClose:()=>void }) {
+  const committed = rows.reduce((sum, row) => sum + row.amount, 0);
+  const available = Math.max(0, Number(card.limit || 0) - committed);
+  const sourceLabel = (source:string) => source === "purchases" ? "Compras detalhadas" : source === "legacy" ? "Saldo/fatura anterior" : source === "paid" ? "Fatura paga" : "Fatura consolidada";
+  return <div className="modal-backdrop" onMouseDown={onClose}>
+    <div className="modal" onMouseDown={(e)=>e.stopPropagation()}>
+      <div className="modal-head"><div><span className="eyebrow">Conferência do limite</span><h2>{card.name}</h2><p>Veja exatamente o que está reduzindo o limite do cartão.</p></div><button type="button" onClick={onClose}><X/></button></div>
+      <div className="planned-reference"><span>Limite total</span><strong>{brl(Number(card.limit || 0))}</strong></div>
+      <div className="future-invoice-list">
+        {rows.length ? rows.map((row)=><section className="future-invoice-month" key={row.month}>
+          <div className="future-invoice-head"><div><span>{monthLabelFromKey(row.month)}</span><strong>{brl(row.amount)}</strong><small>{sourceLabel(row.source)}</small></div></div>
+          <div className="future-invoice-items">
+            {row.purchases > 0 && <div><span>Compras detalhadas</span><strong>{brl(row.purchases)}</strong></div>}
+            {row.legacy > 0 && <div><span>Saldo/fatura anterior em aberto</span><strong>{brl(row.legacy)}</strong></div>}
+            {row.invoice > 0 && <div><span>Fatura consolidada registrada</span><strong>{brl(row.invoice)}</strong></div>}
+            {row.paidInvoice && <div><span>Status</span><strong>Fatura paga · não compromete limite</strong></div>}
+          </div>
+        </section>) : <Empty text="Nenhum valor comprometendo este cartão."/>}
+      </div>
+      <div className="planned-reference"><span>Total comprometido</span><strong>{brl(committed)}</strong></div>
+      <div className="planned-reference"><span>Limite disponível calculado</span><strong>{brl(available)}</strong></div>
+      <p style={{fontSize:11,color:"#64748b",lineHeight:1.5}}>Se o aplicativo do banco mostrar outro valor, esta conferência permite identificar exatamente em qual mês está a diferença. Uma compra/encargo ainda não lançado no NexFin também gera diferença.</p>
+    </div>
+  </div>;
 }
 
 function EditCardModal({ card, householdId, committedValue, onClose }: { card: Card; householdId: string; committedValue: number; onClose: () => void; }) {
