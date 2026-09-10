@@ -34,6 +34,10 @@ export default function Cartoes() {
     () => transactions.filter((t) => t.type === "card" && t.status !== "cancelled" && !isLegacyCardSummary(t)),
     [transactions]
   );
+  const legacyCardSummaries = useMemo(
+    () => transactions.filter((t) => t.type === "card" && t.status !== "cancelled" && isLegacyCardSummary(t)),
+    [transactions]
+  );
 
   const selectedInvoiceTransactions = useMemo(
     () => allInvoiceTransactions.filter((t) => t.invoiceMonth === selectedInvoiceMonth),
@@ -65,26 +69,56 @@ export default function Cartoes() {
   }, [allInvoiceTransactions]);
 
   const committedByCard = useMemo(() => {
-    const map: Record<string, number> = {};
-    allCardPurchases.forEach((t) => {
+    // Regra do limite:
+    // 1) cada fatura aberta compromete o limite pelo valor integral;
+    // 2) compras individuais servem como fallback quando ainda não existe uma fatura consolidada;
+    // 3) lançamentos antigos do tipo "Gastos atual/Fatura" também entram como fallback;
+    // 4) se a fatura do mês já foi paga, aquele mês deixa de comprometer o limite.
+    // Isso evita tanto faltar parcelas futuras quanto somar compra + fatura duas vezes.
+    const byCardMonth: Record<string, { cardId:string; invoiceOpen:number; invoicePaid:boolean; purchasesOpen:number; legacyOpen:number }> = {};
+
+    const ensure = (cardId:string, invoiceMonth:string) => {
+      const key = `${cardId}:${invoiceMonth}`;
+      byCardMonth[key] ||= { cardId, invoiceOpen:0, invoicePaid:false, purchasesOpen:0, legacyOpen:0 };
+      return byCardMonth[key];
+    };
+
+    allInvoiceTransactions.forEach((t) => {
       const cardId = t.sourceCardId || t.cardId || "";
       if (!cardId || !t.invoiceMonth) return;
-      // O limite do cartão é comprometido no momento da compra, mesmo que a parcela
-      // pertença a uma fatura futura. Só deixa de comprometer quando a própria
-      // parcela é marcada como paga/cancelada.
-      if (t.status === "paid" || t.status === "cancelled") return;
-
-      // Compatibilidade apenas com faturas antigas já quitadas antes da rotina
-      // que passou a marcar as parcelas como pagas. Nunca usamos uma fatura futura
-      // como motivo para liberar limite, pois isso esconderia parcelas de meses
-      // seguintes (ex.: compra de outubro feita em setembro).
-      const invoice = invoiceByCardMonth[`${cardId}:${t.invoiceMonth}`];
-      if (invoice?.status === "paid" && t.invoiceMonth <= currentMonth) return;
-
-      map[cardId] = (map[cardId] || 0) + Number(t.amountPlanned || 0);
+      const row = ensure(cardId, t.invoiceMonth);
+      if (t.status === "paid") {
+        row.invoicePaid = true;
+        row.invoiceOpen = 0;
+      } else if (t.status !== "cancelled") {
+        row.invoiceOpen = Math.max(row.invoiceOpen, Number(t.amountPlanned || 0));
+      }
     });
-    return map;
-  }, [allCardPurchases, invoiceByCardMonth, currentMonth]);
+
+    allCardPurchases.forEach((t) => {
+      const cardId = t.sourceCardId || t.cardId || "";
+      if (!cardId || !t.invoiceMonth || t.status === "paid" || t.status === "cancelled") return;
+      const row = ensure(cardId, t.invoiceMonth);
+      row.purchasesOpen += Number(t.amountPlanned || 0);
+    });
+
+    legacyCardSummaries.forEach((t) => {
+      const cardId = t.sourceCardId || t.cardId || "";
+      const invoiceMonth = t.invoiceMonth || (t.dueDate ? t.dueDate.slice(0,7) : "");
+      if (!cardId || !invoiceMonth || t.status === "paid" || t.status === "cancelled") return;
+      const row = ensure(cardId, invoiceMonth);
+      row.legacyOpen += Number(t.amountPlanned || 0);
+    });
+
+    const totals: Record<string, number> = {};
+    Object.values(byCardMonth).forEach((row) => {
+      if (row.invoicePaid) return;
+      const monthCommitment = Math.max(row.invoiceOpen, row.purchasesOpen, row.legacyOpen);
+      totals[row.cardId] = (totals[row.cardId] || 0) + monthCommitment;
+    });
+
+    return totals;
+  }, [allCardPurchases, allInvoiceTransactions, legacyCardSummaries]);
 
   const openInvoiceMonthsByCard = useMemo(() => {
     const map: Record<string, string[]> = {};
@@ -184,6 +218,7 @@ export default function Cartoes() {
               </div>
               <div className="progress dark"><i style={{ width: `${Math.min(100, c.limit ? committedValue / c.limit * 100 : 0)}%` }} /></div>
               <div className="card-limit-summary">
+                <span>Limite total: <b>{brl(Number(c.limit || 0))}</b></span>
                 <span>Limite comprometido: <b>{brl(committedValue)}</b></span>
                 {nextOpenMonth && <span>Próxima em aberto: <b>{monthLabelFromKey(nextOpenMonth)} · {brl(nextOpenValue)}</b></span>}
                 {followingValue > 0 && followingMonth !== nextOpenMonth && <span>Fatura seguinte: <b>{monthLabelFromKey(followingMonth)} · {brl(followingValue)}</b></span>}
