@@ -113,9 +113,8 @@ export async function createBankTransfer(
 export async function settleFinancialTransaction(householdId:string, transactionId:string, payload:{actualAmount:number; actualDate:string; accountId?:string}) {
   const s=getFirebaseServices(); if(!s) throw new Error("Firebase não configurado");
   const txRef = doc(s.db,"households",householdId,"transactions",transactionId);
-  let paidCardInvoice:{cardId:string;invoiceMonth:string;paidDate:string}|null=null;
 
-  await runTransaction(s.db, async tr => {
+  const paidCardInvoice = await runTransaction<{cardId:string;invoiceMonth:string;paidDate:string}|null>(s.db, async tr => {
     const txSnap = await tr.get(txRef);
     if (!txSnap.exists()) throw new Error("Lançamento não encontrado.");
     const tx = txSnap.data() as Transaction;
@@ -146,13 +145,19 @@ export async function settleFinancialTransaction(householdId:string, transaction
     });
 
     if (tx.isCardInvoice === true && tx.invoiceMonth && (tx.sourceCardId || tx.cardId)) {
-      paidCardInvoice={cardId:(tx.sourceCardId||tx.cardId)!,invoiceMonth:tx.invoiceMonth,paidDate:payload.actualDate};
+      return {cardId:(tx.sourceCardId||tx.cardId)!,invoiceMonth:tx.invoiceMonth,paidDate:payload.actualDate};
     }
+    return null;
   });
 
   // Ao pagar a fatura, as parcelas que pertencem a ela deixam de comprometer o limite.
-  if(paidCardInvoice){
-    await markCardInvoicePurchasesAsPaid(householdId,paidCardInvoice.cardId,paidCardInvoice.invoiceMonth,paidCardInvoice.paidDate);
+  if (paidCardInvoice) {
+    await markCardInvoicePurchasesAsPaid(
+      householdId,
+      paidCardInvoice.cardId,
+      paidCardInvoice.invoiceMonth,
+      paidCardInvoice.paidDate
+    );
   }
 }
 
