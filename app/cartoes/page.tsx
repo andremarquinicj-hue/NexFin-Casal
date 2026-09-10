@@ -10,6 +10,11 @@ import { createCardPurchase, createItem, removeCardPurchaseGroup, removeItem, up
 import { Card, Transaction } from "@/lib/types";
 import { useAuth } from "@/components/AuthProvider";
 
+function isLegacyCardSummary(t: Transaction) {
+  const text=(t.description || "").trim().toLowerCase();
+  return /^(fatura($|\s|\-|\.)|fatura do|fatura mês|gastos atual|gastos atuais)/i.test(text);
+}
+
 export default function Cartoes() {
   const { cards, transactions, householdId } = useHouseholdData();
   const { profile } = useAuth();
@@ -26,7 +31,7 @@ export default function Cartoes() {
     [transactions]
   );
   const allCardPurchases = useMemo(
-    () => transactions.filter((t) => t.type === "card" && t.status !== "cancelled"),
+    () => transactions.filter((t) => t.type === "card" && t.status !== "cancelled" && !isLegacyCardSummary(t)),
     [transactions]
   );
 
@@ -64,8 +69,10 @@ export default function Cartoes() {
     allCardPurchases.forEach((t) => {
       const cardId = t.sourceCardId || t.cardId || "";
       if (!cardId || !t.invoiceMonth) return;
+      // Parcela já liquidada pela fatura não compromete mais o limite.
+      if (t.status === "paid") return;
       const invoice = invoiceByCardMonth[`${cardId}:${t.invoiceMonth}`];
-      // A compra compromete o limite enquanto a fatura correspondente ainda não foi paga.
+      // Compatibilidade com faturas antigas que já estavam pagas antes desta atualização.
       if (invoice?.status === "paid" || invoice?.status === "cancelled") return;
       map[cardId] = (map[cardId] || 0) + Number(t.amountPlanned || 0);
     });
@@ -87,6 +94,7 @@ export default function Cartoes() {
   const activePurchasesByCard = useMemo(() => {
     const grouped: Record<string, Record<string, Transaction[]>> = {};
     allCardPurchases.forEach((t) => {
+      if (t.status === "paid") return;
       const cardId = t.sourceCardId || t.cardId || "";
       if (!cardId || !t.installmentGroupId) return;
       grouped[cardId] ||= {};

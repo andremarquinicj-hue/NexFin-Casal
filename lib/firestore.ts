@@ -2,6 +2,7 @@ import {
   addDoc,
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -112,6 +113,8 @@ export async function createBankTransfer(
 export async function settleFinancialTransaction(householdId:string, transactionId:string, payload:{actualAmount:number; actualDate:string; accountId?:string}) {
   const s=getFirebaseServices(); if(!s) throw new Error("Firebase não configurado");
   const txRef = doc(s.db,"households",householdId,"transactions",transactionId);
+  let paidCardInvoice:{cardId:string;invoiceMonth:string;paidDate:string}|null=null;
+
   await runTransaction(s.db, async tr => {
     const txSnap = await tr.get(txRef);
     if (!txSnap.exists()) throw new Error("Lançamento não encontrado.");
@@ -141,7 +144,65 @@ export async function settleFinancialTransaction(householdId:string, transaction
       accountImpactApplied: isBankMovement,
       settledAt: serverTimestamp()
     });
+
+    if (tx.isCardInvoice === true && tx.invoiceMonth && (tx.sourceCardId || tx.cardId)) {
+      paidCardInvoice={cardId:(tx.sourceCardId||tx.cardId)!,invoiceMonth:tx.invoiceMonth,paidDate:payload.actualDate};
+    }
   });
+
+  // Ao pagar a fatura, as parcelas que pertencem a ela deixam de comprometer o limite.
+  if(paidCardInvoice){
+    await markCardInvoicePurchasesAsPaid(householdId,paidCardInvoice.cardId,paidCardInvoice.invoiceMonth,paidCardInvoice.paidDate);
+  }
+}
+
+async function markCardInvoicePurchasesAsPaid(householdId:string,cardId:string,invoiceMonth:string,paidDate:string){
+  const s=getFirebaseServices(); if(!s) throw new Error("Firebase não configurado");
+  const q=query(
+    collection(s.db,"households",householdId,"transactions"),
+    where("type","==","card"),
+    where("sourceCardId","==",cardId),
+    where("invoiceMonth","==",invoiceMonth)
+  );
+  const snap=await getDocs(q);
+  const docs=snap.docs.filter(d=>{
+    const tx=d.data() as Transaction;
+    return tx.status!=="cancelled" && tx.isCardInvoice!==true;
+  });
+  for(let start=0;start<docs.length;start+=400){
+    const batch=writeBatch(s.db);
+    docs.slice(start,start+400).forEach(d=>batch.update(d.ref,{
+      status:"paid",
+      paidDate,
+      settledByInvoice:true,
+      settledAt:serverTimestamp(),
+      updatedAt:serverTimestamp()
+    }));
+    await batch.commit();
+  }
+}
+
+async function reopenCardInvoicePurchases(householdId:string,cardId:string,invoiceMonth:string){
+  const s=getFirebaseServices(); if(!s) throw new Error("Firebase não configurado");
+  const q=query(
+    collection(s.db,"households",householdId,"transactions"),
+    where("type","==","card"),
+    where("sourceCardId","==",cardId),
+    where("invoiceMonth","==",invoiceMonth)
+  );
+  const snap=await getDocs(q);
+  const docs=snap.docs.filter(d=>(d.data() as Record<string,unknown>).settledByInvoice===true);
+  for(let start=0;start<docs.length;start+=400){
+    const batch=writeBatch(s.db);
+    docs.slice(start,start+400).forEach(d=>batch.update(d.ref,{
+      status:"planned",
+      paidDate:deleteField(),
+      settledByInvoice:false,
+      settledAt:deleteField(),
+      updatedAt:serverTimestamp()
+    }));
+    await batch.commit();
+  }
 }
 
 export async function removeFinancialTransaction(householdId:string, transactionId:string) {
@@ -179,7 +240,11 @@ export async function removeFinancialTransaction(householdId:string, transaction
     tr.delete(txRef);
   });
 
-  if (tx.type === "card" && tx.sourceCardId && tx.invoiceMonth) {
+  if (tx.isCardInvoice === true && tx.status === "paid" && tx.invoiceMonth && (tx.sourceCardId || tx.cardId)) {
+    const cardId=tx.sourceCardId || tx.cardId || "";
+    await reopenCardInvoicePurchases(householdId,cardId,tx.invoiceMonth);
+    await syncCardInvoiceForMonth(householdId,cardId,tx.invoiceMonth);
+  } else if (tx.type === "card" && tx.sourceCardId && tx.invoiceMonth) {
     await syncCardInvoiceForMonth(householdId, tx.sourceCardId, tx.invoiceMonth);
   }
 }
